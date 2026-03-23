@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"go-tec/internal/hub"
@@ -12,11 +13,15 @@ import (
 )
 
 const (
-	rtdsProdURL   = "wss://ws-live-data.polymarket.com"
-	rtdsPingEvery = 5 * time.Second
+	rtdsProdURL     = "wss://ws-live-data.polymarket.com"
+	rtdsPingEvery   = 5 * time.Second
+	rtdsMinBackoff  = 1 * time.Second
+	rtdsMaxBackoff  = 60 * time.Second
+	rtdsSubMessage  = `{"action":"subscribe","subscriptions":[{"topic":"crypto_prices","type":"update"}]}`
 )
 
 type RTDSStream struct {
+	mu      sync.Mutex
 	conn    *websocket.Conn
 	handler hub.EventHandler
 	logger  *slog.Logger
@@ -44,6 +49,8 @@ func NewRTDSStream(handler hub.EventHandler, logger *slog.Logger) (*RTDSStream, 
 }
 
 func (s *RTDSStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.conn != nil {
 		return s.conn.Close()
 	}
@@ -51,27 +58,92 @@ func (s *RTDSStream) Close() error {
 }
 
 func (s *RTDSStream) StreamBTCPrice(ctx context.Context) error {
-	sub := `{"action":"subscribe","subscriptions":[{"topic":"crypto_prices","type":"update"}]}`
-	if err := s.conn.WriteMessage(websocket.TextMessage, []byte(sub)); err != nil {
+	if err := s.conn.WriteMessage(websocket.TextMessage, []byte(rtdsSubMessage)); err != nil {
 		return err
 	}
 	s.logger.Info("subscribed to crypto price feed (filtering for btcusdt)")
 
-	go s.pingLoop(ctx)
-	go s.readLoop(ctx)
+	go s.runWithReconnect(ctx)
 
 	return nil
 }
 
-func (s *RTDSStream) pingLoop(ctx context.Context) {
+// runWithReconnect manages the read/ping loops and reconnects on failure.
+func (s *RTDSStream) runWithReconnect(ctx context.Context) {
+	backoff := rtdsMinBackoff
+
+	for {
+		done := make(chan struct{})
+
+		// Start ping loop — closes done channel when connection fails.
+		go s.pingLoop(ctx, done)
+
+		// Read loop blocks until error or ctx cancelled.
+		s.readLoop(ctx, done)
+
+		// If context cancelled, we're shutting down.
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Close the broken connection.
+		s.mu.Lock()
+		if s.conn != nil {
+			s.conn.Close()
+			s.conn = nil
+		}
+		s.mu.Unlock()
+
+		s.logger.Warn("rtds disconnected, reconnecting", "backoff", backoff)
+
+		// Wait before reconnecting.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		// Attempt reconnection.
+		conn, _, err := websocket.DefaultDialer.Dial(rtdsProdURL, nil)
+		if err != nil {
+			s.logger.Warn("rtds reconnect failed", "err", err)
+			backoff = min(backoff*2, rtdsMaxBackoff)
+			continue
+		}
+
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(rtdsSubMessage)); err != nil {
+			s.logger.Warn("rtds resubscribe failed", "err", err)
+			conn.Close()
+			backoff = min(backoff*2, rtdsMaxBackoff)
+			continue
+		}
+
+		s.mu.Lock()
+		s.conn = conn
+		s.mu.Unlock()
+
+		s.logger.Info("rtds reconnected successfully")
+		backoff = rtdsMinBackoff // reset backoff on success
+	}
+}
+
+func (s *RTDSStream) pingLoop(ctx context.Context, done chan struct{}) {
 	ticker := time.NewTicker(rtdsPingEvery)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-done:
+			return
 		case <-ticker.C:
-			if err := s.conn.WriteMessage(websocket.TextMessage, []byte("PING")); err != nil {
+			s.mu.Lock()
+			conn := s.conn
+			s.mu.Unlock()
+			if conn == nil {
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("PING")); err != nil {
 				s.logger.Warn("rtds ping failed", "err", err)
 				return
 			}
@@ -79,7 +151,8 @@ func (s *RTDSStream) pingLoop(ctx context.Context) {
 	}
 }
 
-func (s *RTDSStream) readLoop(ctx context.Context) {
+func (s *RTDSStream) readLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	for {
 		select {
 		case <-ctx.Done():
@@ -87,7 +160,14 @@ func (s *RTDSStream) readLoop(ctx context.Context) {
 		default:
 		}
 
-		_, data, err := s.conn.ReadMessage()
+		s.mu.Lock()
+		conn := s.conn
+		s.mu.Unlock()
+		if conn == nil {
+			return
+		}
+
+		_, data, err := conn.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
 				return

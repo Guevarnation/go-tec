@@ -84,7 +84,7 @@ sqlite3 trades.db "SELECT * FROM trades ORDER BY opened_at DESC LIMIT 20"
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
 scp -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem bot ec2-user@184.72.148.3:~/bot
 ssh -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3 \
-  "sudo cp ~/bot /opt/go-tec/bot && sudo systemctl restart go-tec"
+  "sudo systemctl stop go-tec && sudo cp ~/bot /opt/go-tec/bot && sudo systemctl start go-tec"
 ```
 
 ## Polymarket API notes
