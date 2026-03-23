@@ -1,3 +1,5 @@
+ssh -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3
+
 # Polymarket BTC 5-Min Paper Trading Bot
 
 A Go bot that paper-trades Polymarket's Bitcoin Up/Down 5-minute prediction
@@ -34,7 +36,7 @@ and paper-trades with a $100 simulated bankroll.
 
 ```bash
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
-scp bot deploy/go-tec.service deploy/setup.sh ec2-user@<ip>:~/
+scp bot deploy/go-trading.service deploy/setup.sh ec2-user@<ip>:~/
 ssh ec2-user@<ip> "bash setup.sh"
 ```
 

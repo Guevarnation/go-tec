@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"go-tec/internal/store"
+	"go-trading/internal/store"
 )
 
 // Summary holds aggregate trading performance metrics.

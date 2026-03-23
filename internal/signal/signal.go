@@ -2,7 +2,7 @@ package signal
 
 import (
 	"fmt"
-	"go-tec/internal/hub"
+	"go-trading/internal/hub"
 	"strings"
 	"time"
 )

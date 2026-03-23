@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"go-tec/internal/hub"
+	"go-trading/internal/hub"
 
 	"github.com/gorilla/websocket"
 )

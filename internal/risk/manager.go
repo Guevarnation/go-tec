@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"go-tec/internal/hub"
-	"go-tec/internal/signal"
+	"go-trading/internal/hub"
+	"go-trading/internal/signal"
 )
 
 // ManagerConfig holds tunable risk parameters.

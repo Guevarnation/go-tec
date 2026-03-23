@@ -44,7 +44,7 @@ func (n *Notifier) Send(subject, message string) {
 	}()
 }
 
-// Alert sends a formatted alert with the [go-tec] prefix.
+// Alert sends a formatted alert with the [go-trading] prefix.
 func (n *Notifier) Alert(event, details string) {
-	n.Send(fmt.Sprintf("[go-tec] %s", event), details)
+	n.Send(fmt.Sprintf("[go-trading] %s", event), details)
 }

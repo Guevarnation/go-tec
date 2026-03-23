@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	"go-tec/internal/hub"
+	"go-trading/internal/hub"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws"
 )

@@ -1,6 +1,6 @@
 package signal
 
-import "go-tec/internal/hub"
+import "go-trading/internal/hub"
 
 // Imbalance reads the Up token's orderbook and measures whether buying
 // or selling pressure dominates. More bid depth on Up → market is bullish.

@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"time"
 
-	"go-tec/internal/hub"
-	"go-tec/internal/risk"
-	"go-tec/internal/stats"
-	"go-tec/internal/store"
+	"go-trading/internal/hub"
+	"go-trading/internal/risk"
+	"go-trading/internal/stats"
+	"go-trading/internal/store"
 )
 
 // Server exposes bot status over HTTP.

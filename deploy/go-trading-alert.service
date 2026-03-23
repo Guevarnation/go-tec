@@ -1,0 +1,7 @@
+[Unit]
+Description=Send SNS alert when go-trading bot crashes
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/go-trading/.env
+ExecStart=/bin/sh -c 'test -n "$SNS_TOPIC_ARN" && aws sns publish --topic-arn "$SNS_TOPIC_ARN" --subject "[go-trading] Bot crashed" --message "The go-trading bot exited unexpectedly at $(date -u). Check: journalctl -u go-trading -n 100"'

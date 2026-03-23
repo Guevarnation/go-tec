@@ -1,7 +1,7 @@
 package signal
 
 import (
-	"go-tec/internal/hub"
+	"go-trading/internal/hub"
 	"math"
 )
 

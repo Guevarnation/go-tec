@@ -10,7 +10,7 @@ shares pay $1, incorrect pay $0.
 ## Project Structure
 
 ```
-go-tec/
+go-trading/
   cmd/bot/main.go                 entrypoint, wires everything together
   internal/
     config/config.go              env-based configuration
@@ -40,7 +40,7 @@ go-tec/
       stats.go                  performance analytics: win rate, Sharpe, calibration
     execution/                    (Phase 5) order placement
   deploy/
-    go-tec.service              systemd unit file
+    go-trading.service              systemd unit file
     setup.sh                    EC2 setup and deployment script
     EC2-SETUP.md                full deployment guide
   Dockerfile                    multi-stage build for ARM64
@@ -407,8 +407,9 @@ internal/stats/
 
 ## HTTP Status API
 
-Optional HTTP server enabled by setting `API_PORT` env var. Protected by EC2
-security group (restrict port to your IP only). No TLS needed for personal use.
+Optional HTTP server enabled by setting `API_PORT` env var. Binds to
+`0.0.0.0:8080` with no TLS or auth — access control is handled at the
+network layer (see Security below).
 
 ### Endpoints
 
@@ -418,6 +419,38 @@ security group (restrict port to your IP only). No TLS needed for personal use.
 | `/status`  | Live BTC price, bankroll, exposure, win/loss, current market   |
 | `/trades`  | Recent trades with entry/settlement details (`?limit=N`)       |
 | `/stats`   | All-time + 24h summary, calibration, streaks, edge buckets, signal win rates, time-in-window |
+
+### Security
+
+The API has no authentication — it relies entirely on network-level access control.
+Current approach: EC2 security group whitelists specific IPs on port 8080.
+
+**TODO: nginx reverse proxy + TLS + API key**
+
+The production-standard approach: nginx terminates TLS on port 443, reverse-proxies
+to the bot on localhost:8080, and validates a bearer token. Port 8080 is closed to
+the internet entirely (bind to `127.0.0.1` or firewall it).
+
+```
+Client (HTTPS) → :443 nginx (TLS termination + auth) → :8080 bot (localhost only)
+```
+
+Steps:
+1. Point a domain (or subdomain) at the EC2 IP
+2. Install nginx + certbot on EC2
+3. Let's Encrypt auto-provisions and renews TLS certs
+4. nginx config: proxy_pass to `127.0.0.1:8080`, validate `Authorization: Bearer <token>` header
+5. Security group: close 8080, open 443
+6. Bot binds to `127.0.0.1:8080` (or keep `0.0.0.0` and block 8080 in SG)
+
+Why this is the right approach:
+
+- **Encrypted transport**: TLS protects all traffic — current setup is plaintext HTTP
+- **Authentication**: bearer token prevents unauthorized access even if the IP/port is reachable
+- **No IP management**: any authorized client can connect from any IP, no security group updates needed
+- **Industry standard**: same pattern used by every production API — well-understood, auditable, tooling-friendly
+- **Zero bot code changes**: nginx handles TLS and auth, bot stays a plain HTTP server
+- **Auto-renewing certs**: certbot handles Let's Encrypt renewal via cron/systemd timer
 
 ### Files
 
@@ -442,7 +475,7 @@ Uses `aws` CLI via `os/exec` — zero Go SDK dependencies.
 internal/notify/
   notify.go              async SNS publish via AWS CLI
 deploy/
-  go-tec-alert.service   systemd oneshot triggered on bot crash
+  go-trading-alert.service   systemd oneshot triggered on bot crash
 ```
 
 ## EC2 Deployment (Phase 7)
@@ -460,7 +493,7 @@ Target: EC2 `t4g.nano` (ARM Graviton, 512MB RAM, ~$3/mo with savings plan).
 
 - **Region**: us-east-1 (lowest latency to Polymarket infrastructure)
 - **Instance**: t4g.nano, Amazon Linux 2023 ARM64, public subnet (default VPC)
-- **IAM role**: `go-tec-bot-role` with inline policy: `sns:Publish` + `s3:PutObject`
+- **IAM role**: `go-trading-bot-role` with inline policy: `sns:Publish` + `s3:PutObject`
 - **Security group**: SSH (22) + API (8080) from your IP only, all outbound allowed
 - **EBS**: gp3 8GB, `DeleteOnTermination=No` (protects trade database)
 - **Termination protection**: enabled
@@ -475,27 +508,27 @@ Target: EC2 `t4g.nano` (ARM Graviton, 512MB RAM, ~$3/mo with savings plan).
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
 
 # Copy files to EC2
-scp bot deploy/go-tec.service deploy/go-tec-alert.service deploy/setup.sh ec2-user@<ip>:~/
+scp bot deploy/go-trading.service deploy/go-trading-alert.service deploy/setup.sh ec2-user@<ip>:~/
 
 # SSH in and run setup
 ssh ec2-user@<ip>
-SNS_TOPIC_ARN=arn:aws:sns:us-east-1:021363511692:go-tec-alerts bash ~/setup.sh
+SNS_TOPIC_ARN=arn:aws:sns:us-east-1:021363511692:go-trading-alerts bash ~/setup.sh
 ```
 
 ### Runtime
 
-- **Process management**: systemd with `Restart=always`, `OnFailure=go-tec-alert.service`
-- **Storage**: SQLite on EBS (`/opt/go-tec/data/trades.db`)
+- **Process management**: systemd with `Restart=always`, `OnFailure=go-trading-alert.service`
+- **Storage**: SQLite on EBS (`/opt/go-trading/data/trades.db`)
 - **Backups**: Daily cron to S3 at 04:00 UTC
-- **Logs**: `journalctl -u go-tec -f` (JSON format in production)
+- **Logs**: `journalctl -u go-trading -f` (JSON format in production)
 - **API**: `curl http://<ip>:8080/status`
 
 ### Files
 
 ```
 deploy/
-  go-tec.service                 systemd unit with OnFailure alert
-  go-tec-alert.service           crash notification via SNS
+  go-trading.service                 systemd unit with OnFailure alert
+  go-trading-alert.service           crash notification via SNS
   setup.sh                       EC2 setup automation
 ```
 

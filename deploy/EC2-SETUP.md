@@ -45,7 +45,7 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
 ### 2. Copy files to EC2
 
 ```bash
-scp bot deploy/go-tec.service deploy/setup.sh ec2-user@<EC2-IP>:~/
+scp bot deploy/go-trading.service deploy/setup.sh ec2-user@<EC2-IP>:~/
 ```
 
 ### 3. SSH in and run the setup script
@@ -66,32 +66,32 @@ GO_TEC_S3_BUCKET=your-bucket-name bash setup.sh
 ### Check status
 
 ```bash
-sudo systemctl status go-tec
+sudo systemctl status go-trading
 ```
 
 ### Live logs
 
 ```bash
-sudo journalctl -u go-tec -f
+sudo journalctl -u go-trading -f
 ```
 
 ### Last hour of logs
 
 ```bash
-sudo journalctl -u go-tec --since "1 hour ago"
+sudo journalctl -u go-trading --since "1 hour ago"
 ```
 
 ### Restart after update
 
 ```bash
 scp bot ec2-user@<EC2-IP>:~/
-ssh ec2-user@<EC2-IP> "cp ~/bot /opt/go-tec/bot && sudo systemctl restart go-tec"
+ssh ec2-user@<EC2-IP> "cp ~/bot /opt/go-trading/bot && sudo systemctl restart go-trading"
 ```
 
 ### Download trade database for analysis
 
 ```bash
-scp ec2-user@<EC2-IP>:/opt/go-tec/data/trades.db ./trades.db
+scp ec2-user@<EC2-IP>:/opt/go-trading/data/trades.db ./trades.db
 sqlite3 trades.db "SELECT * FROM trades ORDER BY opened_at DESC LIMIT 20;"
 ```
 

@@ -1,4 +1,4 @@
-module go-tec
+module go-trading
 
 go 1.25.0
 

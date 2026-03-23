@@ -50,7 +50,7 @@ go test ./...
 
 ## EC2 deployment
 
-- **Instance**: `i-0924d2b608a3981b4` (go-bot), t4g.nano, us-east-1
+- **Instance**: `i-0924d2b608a3981b4` (go-trading), t4g.nano, us-east-1
 - **IP**: `184.72.148.3`
 - **IAM role**: `go-trading-bot-role`
 - **SSH key**: `/Users/guevara/Desktop/micontax/guevara-key-pair.pem`
@@ -65,7 +65,7 @@ go test ./...
 ssh -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3
 
 # View logs on EC2
-sudo journalctl -u go-tec -f
+sudo journalctl -u go-trading -f
 
 # Check API
 curl http://184.72.148.3:8080/health
@@ -75,7 +75,7 @@ curl http://184.72.148.3:8080/stats
 
 # Download trade database
 scp -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem \
-  ec2-user@184.72.148.3:/opt/go-tec/data/trades.db .
+  ec2-user@184.72.148.3:/opt/go-trading/data/trades.db .
 
 # Query trades locally
 sqlite3 trades.db "SELECT * FROM trades ORDER BY opened_at DESC LIMIT 20"
@@ -84,7 +84,7 @@ sqlite3 trades.db "SELECT * FROM trades ORDER BY opened_at DESC LIMIT 20"
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
 scp -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem bot ec2-user@184.72.148.3:~/bot
 ssh -i /Users/guevara/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3 \
-  "sudo systemctl stop go-tec && sudo cp ~/bot /opt/go-tec/bot && sudo systemctl start go-tec"
+  "sudo systemctl stop go-trading && sudo cp ~/bot /opt/go-trading/bot && sudo systemctl start go-trading"
 ```
 
 ## Polymarket API notes

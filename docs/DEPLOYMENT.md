@@ -6,7 +6,7 @@
 | --- | --- |
 | Account | `021363511692` (AWS profile: `personal`) |
 | Region | `us-east-1` (N. Virginia) |
-| Instance | `i-0924d2b608a3981b4` (go-bot), t4g.nano |
+| Instance | `i-0924d2b608a3981b4` (go-trading), t4g.nano |
 | Public IP | `184.72.148.3` |
 | AMI | Amazon Linux 2023 ARM64 (`ami-0b11e0ed3f8697f97`) |
 | IAM role | `go-trading-bot-role` |
@@ -21,10 +21,10 @@
 ```
 Your machine ──SSH/SCP──► EC2 t4g.nano (public subnet, default VPC)
                             │
-                            ├── systemd (go-tec.service)
-                            │     └── /opt/go-tec/bot (single binary)
+                            ├── systemd (go-trading.service)
+                            │     └── /opt/go-trading/bot (single binary)
                             │
-                            ├── SQLite (/opt/go-tec/data/trades.db)
+                            ├── SQLite (/opt/go-trading/data/trades.db)
                             │     └── daily backup → S3 at 04:00 UTC
                             │
                             ├── HTTP API (:8080) ← your IP only
@@ -76,7 +76,7 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
 
 # 2. Copy to EC2
 scp -i ~/Desktop/micontax/guevara-key-pair.pem \
-  bot deploy/go-tec.service deploy/go-tec-alert.service deploy/setup.sh \
+  bot deploy/go-trading.service deploy/go-trading-alert.service deploy/setup.sh \
   ec2-user@184.72.148.3:~/
 
 # 3. SSH in and run setup
@@ -88,11 +88,11 @@ bash ~/setup.sh
 # 4. Install cron (Amazon Linux 2023 doesn't include it)
 sudo dnf install -y cronie
 sudo systemctl enable crond --now
-(echo "0 4 * * * aws s3 cp /opt/go-tec/data/trades.db s3://go-trading-db-backups/backups/trades-\$(date +\%Y\%m\%d).db") | crontab -
+(echo "0 4 * * * aws s3 cp /opt/go-trading/data/trades.db s3://go-trading-db-backups/backups/trades-\$(date +\%Y\%m\%d).db") | crontab -
 
 # 5. Enable API
-echo "API_PORT=8080" >> /opt/go-tec/.env
-sudo systemctl restart go-tec
+echo "API_PORT=8080" >> /opt/go-trading/.env
+sudo systemctl restart go-trading
 ```
 
 ## Deploy Updates
@@ -104,7 +104,7 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
 # Copy and restart
 scp -i ~/Desktop/micontax/guevara-key-pair.pem bot ec2-user@184.72.148.3:~/bot
 ssh -i ~/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3 \
-  "sudo cp ~/bot /opt/go-tec/bot && sudo systemctl restart go-tec"
+  "sudo cp ~/bot /opt/go-trading/bot && sudo systemctl restart go-trading"
 ```
 
 ## Monitoring
@@ -114,10 +114,10 @@ ssh -i ~/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3 \
 ssh -i ~/Desktop/micontax/guevara-key-pair.pem ec2-user@184.72.148.3
 
 # Live logs
-sudo journalctl -u go-tec -f
+sudo journalctl -u go-trading -f
 
 # Bot status
-sudo systemctl status go-tec
+sudo systemctl status go-trading
 
 # API endpoints (from local machine)
 curl http://184.72.148.3:8080/health
@@ -127,7 +127,7 @@ curl http://184.72.148.3:8080/stats
 
 # Download trade database for local analysis
 scp -i ~/Desktop/micontax/guevara-key-pair.pem \
-  ec2-user@184.72.148.3:/opt/go-tec/data/trades.db .
+  ec2-user@184.72.148.3:/opt/go-trading/data/trades.db .
 sqlite3 trades.db "SELECT * FROM trades ORDER BY opened_at DESC LIMIT 20"
 ```
 
@@ -135,13 +135,13 @@ sqlite3 trades.db "SELECT * FROM trades ORDER BY opened_at DESC LIMIT 20"
 
 ```bash
 # Bot won't start
-sudo journalctl -u go-tec --no-pager -n 50
+sudo journalctl -u go-trading --no-pager -n 50
 
 # Check .env file
-cat /opt/go-tec/.env
+cat /opt/go-trading/.env
 
 # Restart
-sudo systemctl restart go-tec
+sudo systemctl restart go-trading
 
 # Check disk space
 df -h
@@ -153,7 +153,7 @@ free -m
 ss -tlnp | grep 8080
 
 # Manual S3 backup
-aws s3 cp /opt/go-tec/data/trades.db s3://go-trading-db-backups/backups/trades-manual.db
+aws s3 cp /opt/go-trading/data/trades.db s3://go-trading-db-backups/backups/trades-manual.db
 
 # Test SNS alert
 aws sns publish --topic-arn arn:aws:sns:us-east-1:021363511692:go-trading-alerts \

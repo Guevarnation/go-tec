@@ -6,13 +6,13 @@ set -euo pipefail
 #
 # Usage:
 #   1. Build locally:  GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
-#   2. Copy to EC2:    scp bot deploy/go-tec.service ec2-user@<ip>:~/
+#   2. Copy to EC2:    scp bot deploy/go-trading.service ec2-user@<ip>:~/
 #   3. SSH in and run: bash setup.sh
 
-BOT_DIR="/opt/go-tec"
+BOT_DIR="/opt/go-trading"
 DATA_DIR="${BOT_DIR}/data"
-SERVICE_FILE="/etc/systemd/system/go-tec.service"
-ALERT_SERVICE_FILE="/etc/systemd/system/go-tec-alert.service"
+SERVICE_FILE="/etc/systemd/system/go-trading.service"
+ALERT_SERVICE_FILE="/etc/systemd/system/go-trading-alert.service"
 S3_BUCKET="${GO_TEC_S3_BUCKET:-}"
 SNS_TOPIC="${SNS_TOPIC_ARN:-}"
 
@@ -31,15 +31,15 @@ if [ -n "${SNS_TOPIC}" ]; then
 fi
 
 echo "==> Installing systemd services"
-sudo cp ~/go-tec.service "${SERVICE_FILE}"
-sudo cp ~/go-tec-alert.service "${ALERT_SERVICE_FILE}"
+sudo cp ~/go-trading.service "${SERVICE_FILE}"
+sudo cp ~/go-trading-alert.service "${ALERT_SERVICE_FILE}"
 sudo systemctl daemon-reload
-sudo systemctl enable go-tec
-sudo systemctl start go-tec
+sudo systemctl enable go-trading
+sudo systemctl start go-trading
 
 echo "==> Bot is running. Check status:"
-echo "    sudo systemctl status go-tec"
-echo "    sudo journalctl -u go-tec -f"
+echo "    sudo systemctl status go-trading"
+echo "    sudo journalctl -u go-trading -f"
 
 if [ -n "${S3_BUCKET}" ]; then
     echo "==> Setting up daily S3 backup"
