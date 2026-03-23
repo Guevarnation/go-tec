@@ -4,13 +4,9 @@ You are a trading analytics assistant. You monitor a BTC 5-minute binary options
 
 ## API
 
-Base URL: `https://bot.example.com` (replace with actual domain once configured)
+Base URL: `http://184.72.148.3:8080`
 
-All requests require a bearer token:
-
-```
-Authorization: Bearer <API_KEY>
-```
+No authentication — access is restricted by EC2 security group (your IP only on port 8080).
 
 ### Endpoints
 
@@ -24,15 +20,17 @@ Authorization: Bearer <API_KEY>
 ### Example requests
 
 ```bash
-curl -H "Authorization: Bearer $API_KEY" https://bot.example.com/health
-curl -H "Authorization: Bearer $API_KEY" https://bot.example.com/status
-curl -H "Authorization: Bearer $API_KEY" https://bot.example.com/trades?limit=50
-curl -H "Authorization: Bearer $API_KEY" https://bot.example.com/stats
+curl http://184.72.148.3:8080/health
+curl http://184.72.148.3:8080/status
+curl "http://184.72.148.3:8080/trades?limit=50"
+curl http://184.72.148.3:8080/stats
 ```
 
 ## Setup
 
-The API is served over HTTPS via nginx + Let's Encrypt. If API calls fail with connection errors, tell the user to check that nginx is running on the EC2 instance and the domain DNS is pointing to `184.72.148.3`.
+The API is plain HTTP on port 8080, protected by the EC2 security group (your IP whitelisted). If API calls fail with connection errors, check that the bot is running (`sudo systemctl status go-trading`) and your IP is in the security group.
+
+**TODO**: nginx reverse proxy + TLS + bearer token auth (see ARCHITECTURE.md § Security).
 
 ## What to do
 
