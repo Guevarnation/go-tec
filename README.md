@@ -1,91 +1,69 @@
-# Log Aggregator
+# Polymarket BTC 5-Min Paper Trading Bot
 
-A concurrent log file merger that reads multiple log sources in parallel, merges entries chronologically, and computes statistics. Standard library only.
+A Go bot that paper-trades Polymarket's Bitcoin Up/Down 5-minute prediction
+markets. Streams real-time data, evaluates signals, sizes positions via Kelly
+Criterion, and logs everything to SQLite for analysis.
 
-## Usage
-
-```bash
-go run main.go auth.log api.log db.log
-```
-
-## Log Format
-
-```
-2024-01-15T10:04:01Z ERROR service=auth message="invalid token"
-```
-
-Each line has: `<RFC3339 timestamp> <LEVEL> service=<name> message="<text>"`
-
-## How It Works
-
-The program flows through 4 stages: **Parse → Collect → Sort → Stats**.
-
-### Functions
-
-#### `parseLine(line string) (LogEntry, error)`
-Parses a single log line. Splits by spaces to extract the timestamp and level, then iterates over `key=value` pairs to extract `service` and `message`. Handles quoted values (with spaces inside). Returns an error for any malformed line.
-
-#### `parseReader(r io.Reader) ([]LogEntry, error)`
-Wraps a `bufio.Scanner` around a reader and calls `parseLine` for each line. Malformed lines are skipped with a warning to stderr. If the underlying reader fails (e.g., disk error), the error is returned alongside any entries that were successfully parsed before the failure.
-
-#### `Merge(sources []io.Reader) ([]LogEntry, Stats, error)`
-Entry point. Delegates to `MergeWithFilter` with a nil filter.
-
-#### `MergeWithFilter(sources []io.Reader, keep func(LogEntry) bool) ([]LogEntry, Stats, error)`
-Core function that orchestrates everything:
-
-1. **Concurrent parsing** — Spawns one goroutine per `io.Reader`. Each goroutine calls `parseReader` and writes its result to a pre-allocated slot in a `[]result` slice (indexed by goroutine number).
-2. **Synchronization** — A `sync.WaitGroup` blocks until all goroutines finish. No goroutine outlives the function call.
-3. **Collection** — Iterates over the results slice, appending all entries into one flat slice and collecting any reader errors.
-4. **Filtering** — If a `keep` function is provided, entries that don't match are discarded.
-5. **Sorting** — `sort.Slice` orders entries chronologically. Entries with the same timestamp are sorted alphabetically by service name.
-6. **Stats** — `computeStats` does a single pass over the sorted slice to populate all `Stats` fields.
-
-#### `computeStats(entries []LogEntry) Stats`
-Single loop over the sorted entries. Sets `FirstEntry` and `LastEntry` from the first/last elements. Counts entries by level and service using maps.
-
-#### `main()`
-Opens files from `os.Args[1:]`, passes them as `[]io.Reader` to `Merge`, and prints the formatted output.
-
-## Design Decisions
-
-### Pre-allocated slice instead of channels
-Each goroutine writes to `results[idx]` — its own dedicated slot. This eliminates the need for a mutex during concurrent parsing and avoids channel complexity. After `wg.Wait()`, the main goroutine reads all slots sequentially. This is race-free by construction since no two goroutines share an index.
-
-### Collect-then-sort instead of k-way merge
-A k-way merge (using a heap) would be more efficient for very large inputs since individual files are often pre-sorted. However, `sort.Slice` on the combined slice is simpler, correct regardless of input order, and sufficient for the expected scale. The O(n log n) sort is the simplest approach that meets all requirements.
-
-### Errors are collected, not fatal
-Reader errors are accumulated and returned alongside whatever entries were successfully parsed. This means a single failing source doesn't prevent results from other sources. The caller decides how to handle the error.
-
-### Filter applied before sorting
-Filtering before sort reduces the number of elements to sort, which is a minor optimization. Stats are computed after filtering, so they reflect only the entries that passed the filter.
-
-## Running Tests
+## Quick Start
 
 ```bash
-go test -race -v ./...
+# Run locally with colored output
+go run ./cmd/bot
+
+# Debug logging
+LOG_LEVEL=DEBUG go run ./cmd/bot
+
+# JSON output (for production / CloudWatch)
+LOG_FORMAT=json go run ./cmd/bot
 ```
 
-### Test Coverage
+No API keys, no wallet, no authentication needed. The bot reads public data
+and paper-trades with a $100 simulated bankroll.
 
-| Test | Edge Case |
-|---|---|
-| `ParseLine_Valid` | Standard line parsing |
-| `ParseLine_EmptyMessage` | `message=""` |
-| `ParseLine_Malformed` | Empty, bad timestamp, missing fields |
-| `Merge_BasicThreeSources` | Multi-source merge, full stats, ordering |
-| `Merge_EmptyReader` | Reader with no content |
-| `Merge_NoSources` | Zero readers |
-| `Merge_SingleReader` | Out-of-order lines in one file |
-| `Merge_MalformedLinesSkipped` | Garbage lines mixed with valid |
-| `Merge_DuplicateEntries` | Identical entries from different sources |
-| `Merge_ManySources` | 10 concurrent readers |
-| `Merge_SameTimestampTieBreaking` | Alphabetical service sort on ties |
-| `Merge_MessageWithSpaces` | Multi-word quoted message |
-| `Merge_ReaderError` | Reader fails mid-read, error propagated |
-| `Merge_AllReadersError` | All readers fail |
-| `MergeWithFilter_ErrorsOnly` | Filter by level |
-| `MergeWithFilter_NilFilter` | Nil filter = no filtering |
-| `MergeWithFilter_ServiceFilter` | Filter by service |
-# go-tec
+## What It Does
+
+1. Discovers BTC 5-minute Up/Down markets via the Gamma API
+2. Streams real-time orderbook, trades, and BTC price via WebSocket
+3. Evaluates signals every 5s (momentum, orderbook imbalance, edge)
+4. Sizes paper trades using Kelly Criterion with risk limits
+5. Settles positions when markets resolve (WS events + API fallback)
+6. Logs every trade and settlement to `data/trades.db` (SQLite)
+7. Computes hourly performance stats: win rate, Sharpe, calibration, P&L by hour
+
+## Deploy to EC2
+
+```bash
+GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
+scp bot deploy/go-tec.service deploy/setup.sh ec2-user@<ip>:~/
+ssh ec2-user@<ip> "bash setup.sh"
+```
+
+See [deploy/EC2-SETUP.md](deploy/EC2-SETUP.md) for full instructions.
+Estimated cost: ~$3.72/month on t4g.nano.
+
+## Analyze Results
+
+```bash
+# Download the trade database
+scp ec2-user@<ip>:/opt/go-tec/data/trades.db ./trades.db
+
+# Win rate and P&L
+sqlite3 trades.db "SELECT COUNT(*), SUM(CASE WHEN won=1 THEN 1 ELSE 0 END), ROUND(SUM(pnl),2) FROM trades WHERE settled_at IS NOT NULL;"
+```
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full documentation.
+
+## Configuration
+
+| Variable             | Default         | Description                                   |
+| -------------------- | --------------- | --------------------------------------------- |
+| `LOG_LEVEL`          | `INFO`          | DEBUG, INFO, WARN, ERROR                      |
+| `LOG_FORMAT`         | `text`          | `text` (colored) or `json` (machine-readable) |
+| `DATA_DIR`           | `./data`        | Directory for SQLite database                 |
+| `MARKET_SLUG_PREFIX` | `btc-updown-5m` | Market slug prefix                            |
+
+## Requirements
+
+- Go 1.25+

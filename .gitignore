@@ -1,0 +1,31 @@
+# Binaries
+bot
+*.exe
+*.out
+
+# Go build cache
+/vendor/
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (SQLite trade database)
+/data/
+
+# Logs
+*.log
+
+# Test output
+/tmp/
+coverage.out
