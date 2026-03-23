@@ -11,20 +11,21 @@ import (
 
 // Summary holds aggregate trading performance metrics.
 type Summary struct {
-	Period        string
-	MarketsTraded int
-	Wins          int
-	Losses        int
-	WinRate       float64
-	TotalPnL      float64
-	GrossWins     float64
-	GrossLosses   float64
-	ProfitFactor  float64 // gross_wins / abs(gross_losses)
-	AvgEdge       float64
-	AvgConfidence float64
-	AvgKelly      float64
-	MaxDrawdown   float64
-	SharpeRatio   float64
+	Period        string  `json:"period"`
+	MarketsTraded int     `json:"markets_traded"`
+	Wins          int     `json:"wins"`
+	Losses        int     `json:"losses"`
+	WinRate       float64 `json:"win_rate"`
+	TotalPnL      float64 `json:"total_pnl"`
+	GrossWins     float64 `json:"gross_wins"`
+	GrossLosses   float64 `json:"gross_losses"`
+	ProfitFactor  float64 `json:"profit_factor"`
+	AvgEdge       float64 `json:"avg_edge"`
+	AvgConfidence float64 `json:"avg_confidence"`
+	AvgKelly      float64 `json:"avg_kelly"`
+	MaxDrawdown   float64 `json:"max_drawdown"`
+	SharpeRatio   float64 `json:"sharpe_ratio"`
+	BrierScore    float64 `json:"brier_score"`
 }
 
 func (s Summary) String() string {
@@ -38,10 +39,10 @@ func (s Summary) String() string {
 
 // CalibrationBucket compares model-predicted probabilities to actual outcomes.
 type CalibrationBucket struct {
-	Label     string  // e.g., "0.50-0.60"
-	Predicted float64 // average model probability in this bucket
-	Actual    float64 // actual win rate
-	Count     int
+	Label     string  `json:"label"`
+	Predicted float64 `json:"predicted"`
+	Actual    float64 `json:"actual"`
+	Count     int     `json:"count"`
 }
 
 func (b CalibrationBucket) String() string {
@@ -51,10 +52,10 @@ func (b CalibrationBucket) String() string {
 
 // HourBucket holds P&L for a specific hour of day.
 type HourBucket struct {
-	Hour    int
-	Trades  int
-	PnL     float64
-	WinRate float64
+	Hour    int     `json:"hour"`
+	Trades  int     `json:"trades"`
+	PnL     float64 `json:"pnl"`
+	WinRate float64 `json:"win_rate"`
 }
 
 // ComputeSummary calculates aggregate metrics from settled trades.
@@ -106,6 +107,7 @@ func ComputeSummary(trades []store.SettledTrade, period string) Summary {
 	}
 
 	s.SharpeRatio = sharpe(pnls)
+	s.BrierScore = BrierScore(trades)
 
 	return s
 }
@@ -220,6 +222,197 @@ func FormatHourly(buckets []HourBucket) string {
 	return strings.Join(parts, " ")
 }
 
+// BrierScore computes the mean squared error between predicted probabilities
+// and actual outcomes. Lower is better; 0.25 = random for 50/50 events.
+func BrierScore(trades []store.SettledTrade) float64 {
+	if len(trades) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, t := range trades {
+		p := t.ModelProb
+		if t.Direction == "BUY_DOWN" {
+			p = 1 - p
+		}
+		outcome := 0.0
+		if t.Won {
+			outcome = 1.0
+		}
+		diff := p - outcome
+		sum += diff * diff
+	}
+	return sum / float64(len(trades))
+}
+
+// StreakStats tracks consecutive win/loss patterns.
+type StreakStats struct {
+	MaxWinStreak  int `json:"max_win_streak"`
+	MaxLossStreak int `json:"max_loss_streak"`
+	CurrentStreak int `json:"current_streak"`
+}
+
+func (s StreakStats) String() string {
+	return fmt.Sprintf("max_win=%d max_loss=%d current=%d", s.MaxWinStreak, s.MaxLossStreak, s.CurrentStreak)
+}
+
+func ComputeStreaks(trades []store.SettledTrade) StreakStats {
+	var s StreakStats
+	var current int
+	for _, t := range trades {
+		if t.Won {
+			if current > 0 {
+				current++
+			} else {
+				current = 1
+			}
+			if current > s.MaxWinStreak {
+				s.MaxWinStreak = current
+			}
+		} else {
+			if current < 0 {
+				current--
+			} else {
+				current = -1
+			}
+			if -current > s.MaxLossStreak {
+				s.MaxLossStreak = -current
+			}
+		}
+	}
+	s.CurrentStreak = current
+	return s
+}
+
+// EdgeBucket groups trades by predicted edge to verify higher edge = more profit.
+type EdgeBucket struct {
+	Label   string  `json:"label"`
+	AvgEdge float64 `json:"avg_edge"`
+	WinRate float64 `json:"win_rate"`
+	AvgPnL  float64 `json:"avg_pnl"`
+	Count   int     `json:"count"`
+}
+
+func ComputeEdgeBuckets(trades []store.SettledTrade) []EdgeBucket {
+	type acc struct {
+		sumEdge float64
+		sumPnL  float64
+		wins    int
+		total   int
+	}
+	buckets := make([]acc, 4)
+	labels := []string{"0.00-0.05", "0.05-0.10", "0.10-0.20", "0.20+"}
+
+	for _, t := range trades {
+		var idx int
+		switch {
+		case t.Edge < 0.05:
+			idx = 0
+		case t.Edge < 0.10:
+			idx = 1
+		case t.Edge < 0.20:
+			idx = 2
+		default:
+			idx = 3
+		}
+		buckets[idx].sumEdge += t.Edge
+		buckets[idx].sumPnL += t.PnL
+		buckets[idx].total++
+		if t.Won {
+			buckets[idx].wins++
+		}
+	}
+
+	var result []EdgeBucket
+	for i, b := range buckets {
+		if b.total == 0 {
+			continue
+		}
+		result = append(result, EdgeBucket{
+			Label:   labels[i],
+			AvgEdge: b.sumEdge / float64(b.total),
+			WinRate: float64(b.wins) / float64(b.total),
+			AvgPnL:  b.sumPnL / float64(b.total),
+			Count:   b.total,
+		})
+	}
+	return result
+}
+
+func FormatEdgeBuckets(buckets []EdgeBucket) string {
+	if len(buckets) == 0 {
+		return "no edge data"
+	}
+	var parts []string
+	for _, b := range buckets {
+		parts = append(parts, fmt.Sprintf("%s wr=%.0f%% pnl=$%.2f n=%d",
+			b.Label, b.WinRate*100, b.AvgPnL, b.Count))
+	}
+	return strings.Join(parts, " | ")
+}
+
+// SignalWinRate shows how each signal direction correlates with outcomes.
+type SignalWinRate struct {
+	Name     string  `json:"name"`
+	Positive WinLoss `json:"positive"`
+	Negative WinLoss `json:"negative"`
+}
+
+type WinLoss struct {
+	Wins    int     `json:"wins"`
+	Total   int     `json:"total"`
+	WinRate float64 `json:"win_rate"`
+}
+
+func ComputeSignalWinRates(trades []store.SettledTrade) []SignalWinRate {
+	names := []string{"momentum", "imbalance", "edge", "tradeflow"}
+	results := make([]SignalWinRate, len(names))
+
+	for i, name := range names {
+		results[i].Name = name
+		for _, t := range trades {
+			var val float64
+			switch name {
+			case "momentum":
+				val = t.Momentum
+			case "imbalance":
+				val = t.Imbalance
+			case "edge":
+				val = t.EdgeSignal
+			case "tradeflow":
+				val = t.TradeFlow
+			}
+			if val > 0 {
+				results[i].Positive.Total++
+				if t.Won {
+					results[i].Positive.Wins++
+				}
+			} else if val < 0 {
+				results[i].Negative.Total++
+				if t.Won {
+					results[i].Negative.Wins++
+				}
+			}
+		}
+		if results[i].Positive.Total > 0 {
+			results[i].Positive.WinRate = float64(results[i].Positive.Wins) / float64(results[i].Positive.Total)
+		}
+		if results[i].Negative.Total > 0 {
+			results[i].Negative.WinRate = float64(results[i].Negative.Wins) / float64(results[i].Negative.Total)
+		}
+	}
+	return results
+}
+
+func FormatSignalWinRates(rates []SignalWinRate) string {
+	var parts []string
+	for _, r := range rates {
+		parts = append(parts, fmt.Sprintf("%s[+wr=%.0f%%(%d) -wr=%.0f%%(%d)]",
+			r.Name, r.Positive.WinRate*100, r.Positive.Total,
+			r.Negative.WinRate*100, r.Negative.Total))
+	}
+	return strings.Join(parts, " ")
+}
+
 func sharpe(pnls []float64) float64 {
 	n := len(pnls)
 	if n < 2 {
@@ -245,6 +438,124 @@ func sharpe(pnls []float64) float64 {
 
 	// Annualize: ~300 markets/day * 365 = ~109,500 trades/year
 	tradesPerYear := 109500.0
-	_ = time.Now() // keep time import used
 	return (mean / stddev) * math.Sqrt(tradesPerYear)
+}
+
+// TimeWindowBucket groups trades by how much time remained in the 5-min window
+// when the trade was opened. Helps identify if the bot performs better entering
+// early vs late in a market window.
+type TimeWindowBucket struct {
+	Label   string  `json:"label"`
+	MinSec  int     `json:"min_sec"`
+	MaxSec  int     `json:"max_sec"`
+	Trades  int     `json:"trades"`
+	Wins    int     `json:"wins"`
+	WinRate float64 `json:"win_rate"`
+	AvgPnL  float64 `json:"avg_pnl"`
+	TotalPnL float64 `json:"total_pnl"`
+}
+
+// ComputeTimeInWindow buckets trades by time-to-expiry at entry.
+// Slug format: btc-updown-5m-{unix_timestamp}, window = 300s.
+func ComputeTimeInWindow(trades []store.SettledTrade) []TimeWindowBucket {
+	type acc struct {
+		wins   int
+		total  int
+		sumPnL float64
+	}
+
+	// Buckets: early (180-300s), mid (90-180s), late (0-90s)
+	buckets := []struct {
+		label    string
+		minSec   int
+		maxSec   int
+	}{
+		{"late (0-90s)", 0, 90},
+		{"mid (90-180s)", 90, 180},
+		{"early (180-300s)", 180, 300},
+	}
+	accs := make([]acc, len(buckets))
+
+	for _, t := range trades {
+		ttx := timeToExpiry(t.Slug, t.OpenedAt)
+		if ttx < 0 {
+			continue // couldn't parse slug
+		}
+
+		for i, b := range buckets {
+			if ttx >= b.minSec && ttx < b.maxSec {
+				accs[i].total++
+				accs[i].sumPnL += t.PnL
+				if t.Won {
+					accs[i].wins++
+				}
+				break
+			}
+		}
+	}
+
+	var result []TimeWindowBucket
+	for i, b := range buckets {
+		a := accs[i]
+		if a.total == 0 {
+			continue
+		}
+		wr := float64(a.wins) / float64(a.total)
+		result = append(result, TimeWindowBucket{
+			Label:    b.label,
+			MinSec:   b.minSec,
+			MaxSec:   b.maxSec,
+			Trades:   a.total,
+			Wins:     a.wins,
+			WinRate:  wr,
+			AvgPnL:   a.sumPnL / float64(a.total),
+			TotalPnL: a.sumPnL,
+		})
+	}
+	return result
+}
+
+// FormatTimeInWindow returns a compact summary of time-in-window analysis.
+func FormatTimeInWindow(buckets []TimeWindowBucket) string {
+	if len(buckets) == 0 {
+		return "no time-in-window data"
+	}
+	var parts []string
+	for _, b := range buckets {
+		parts = append(parts, fmt.Sprintf("%s wr=%.0f%% pnl=$%.2f n=%d",
+			b.Label, b.WinRate*100, b.AvgPnL, b.Trades))
+	}
+	return strings.Join(parts, " | ")
+}
+
+// timeToExpiry extracts seconds remaining in the 5-min window when a trade was opened.
+// Returns -1 if the slug can't be parsed.
+func timeToExpiry(slug string, openedAt time.Time) int {
+	// Slug format: btc-updown-5m-{unix_timestamp}
+	parts := strings.Split(slug, "-")
+	if len(parts) < 4 {
+		return -1
+	}
+	// The timestamp is the last part
+	tsStr := parts[len(parts)-1]
+	var ts int64
+	for _, c := range tsStr {
+		if c < '0' || c > '9' {
+			return -1
+		}
+		ts = ts*10 + int64(c-'0')
+	}
+	if ts == 0 {
+		return -1
+	}
+
+	endTime := time.Unix(ts+300, 0)
+	remaining := int(endTime.Sub(openedAt).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > 300 {
+		remaining = 300
+	}
+	return remaining
 }

@@ -1,6 +1,9 @@
 package hub
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // TradeEntry records a single trade execution for VWAP and velocity calculations.
 type TradeEntry struct {
@@ -75,4 +78,19 @@ func (b *TradeBuffer) Velocity(window time.Duration) float64 {
 		return 0
 	}
 	return float64(len(trades)) / secs
+}
+
+// BuySellVolume returns total buy and sell volume over the given window.
+func (b *TradeBuffer) BuySellVolume(window time.Duration) (buyVol, sellVol float64) {
+	since := time.Now().Unix() - int64(window.Seconds())
+	trades := b.RecentSince(since)
+	for _, t := range trades {
+		switch strings.ToLower(t.Side) {
+		case "buy":
+			buyVol += t.Size
+		case "sell":
+			sellVol += t.Size
+		}
+	}
+	return
 }

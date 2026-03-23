@@ -14,6 +14,8 @@ type Config struct {
 	RTDSWSURL        string
 	MarketSlugPrefix string
 	DataDir          string // directory for SQLite database
+	SNSTopicARN      string // optional: AWS SNS topic ARN for alerts
+	APIPort          string // optional: HTTP API port (e.g. "8080"), empty = disabled
 }
 
 func Load() *Config {
@@ -25,6 +27,8 @@ func Load() *Config {
 		RTDSWSURL:        getEnv("RTDS_WS_URL", "wss://ws-live-data.polymarket.com"),
 		MarketSlugPrefix: getEnv("MARKET_SLUG_PREFIX", "btc-updown-5m"),
 		DataDir:          getEnv("DATA_DIR", "./data"),
+		SNSTopicARN:      getEnv("SNS_TOPIC_ARN", ""),
+		APIPort:          getEnv("API_PORT", ""),
 	}
 }
 

@@ -2,6 +2,7 @@
 Description=Polymarket BTC 5-min Paper Trading Bot
 After=network-online.target
 Wants=network-online.target
+OnFailure=go-tec-alert.service
 
 [Service]
 Type=simple
@@ -11,6 +12,7 @@ ExecStart=/opt/go-tec/bot
 Restart=always
 RestartSec=5
 
+EnvironmentFile=-/opt/go-tec/.env
 Environment=LOG_FORMAT=json
 Environment=LOG_LEVEL=INFO
 Environment=DATA_DIR=/opt/go-tec/data

@@ -53,6 +53,7 @@ go-tec/
 Polymarket exposes four APIs. No testnet exists; all endpoints are production.
 Public (read-only) endpoints require no authentication and cost nothing.
 
+
 | API            | Base URL                                               | Auth             | Purpose                                 |
 | -------------- | ------------------------------------------------------ | ---------------- | --------------------------------------- |
 | Gamma API      | `https://gamma-api.polymarket.com`                     | None             | Market discovery, metadata, search      |
@@ -60,11 +61,12 @@ Public (read-only) endpoints require no authentication and cost nothing.
 | CLOB WebSocket | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | None (public)    | Real-time orderbook, trades, events     |
 | RTDS WebSocket | `wss://ws-live-data.polymarket.com`                    | None             | Live crypto prices (Binance, Chainlink) |
 
+
 ## How BTC 5-Minute Markets Work
 
 - New markets are created every 5 minutes, 24/7
 - Event slugs follow the pattern `btc-updown-5m-{unix_timestamp}` where the
-  timestamp is the window start time, rounded to 300-second boundaries
+timestamp is the window start time, rounded to 300-second boundaries
 - Each event contains one market with two outcomes: "Up" and "Down"
 - Each outcome has a CLOB token ID used for WebSocket subscriptions and trading
 - Resolution uses Chainlink BTC/USD: if closing price >= opening price, "Up" wins
@@ -74,10 +76,10 @@ Public (read-only) endpoints require no authentication and cost nothing.
 We do NOT use the Gamma `/markets` endpoint because:
 
 1. The SDK's `gamma.Market` struct has a type mismatch bug (`volumeNum` is
-   declared as `string` but the API returns a number), causing deserialization
+  declared as `string` but the API returns a number), causing deserialization
    failures
 2. The 5-min markets are best discovered via the `/events` endpoint using the
-   predictable slug pattern
+  predictable slug pattern
 
 Instead, we compute the expected slugs from the current time:
 
@@ -100,6 +102,7 @@ Uses `github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws`. The SDK handles:
 
 We subscribe to these event types for the discovered asset IDs:
 
+
 | Event Type         | Channel Return Type          | Data                                     |
 | ------------------ | ---------------------------- | ---------------------------------------- |
 | `orderbook`        | `<-chan OrderbookEvent`      | Full L2 book (bids/asks with price+size) |
@@ -108,6 +111,7 @@ We subscribe to these event types for the discovered asset IDs:
 | `new_market`       | `<-chan NewMarketEvent`      | New market creation                      |
 | `market_resolved`  | `<-chan MarketResolvedEvent` | Resolution with winning outcome          |
 
+
 ### RTDS WebSocket (via gorilla/websocket)
 
 Uses `github.com/gorilla/websocket` directly instead of the SDK's RTDS client.
@@ -115,9 +119,9 @@ Uses `github.com/gorilla/websocket` directly instead of the SDK's RTDS client.
 **Why not the SDK?** Two issues:
 
 1. `rtds.NewClient("")` starts connection asynchronously. `SubscribeCryptoPrices()`
-   blocks on an internal `connReady` channel that never signals, hanging the bot.
+  blocks on an internal `connReady` channel that never signals, hanging the bot.
 2. The SDK sends `filters` as a JSON array (`["btcusdt"]`), but the RTDS server
-   rejects any `filters` value for the `crypto_prices` topic with a 400 error.
+  rejects any `filters` value for the `crypto_prices` topic with a 400 error.
 
 **Working approach:** Subscribe to all crypto prices (no filters), filter for
 `btcusdt` client-side. The server sends updates for ~6 symbols every second,
@@ -127,12 +131,12 @@ Protocol details:
 
 - Send `PING` text message every 5 seconds (server responds with `PONG`)
 - Subscribe: `{"action":"subscribe","subscriptions":[{"topic":"crypto_prices","type":"update"}]}`
-- Messages: `{"topic":"crypto_prices","type":"update","timestamp":...,
-"payload":{"symbol":"btcusdt","value":68127.41,"timestamp":...}}`
+- Messages: `{"topic":"crypto_prices","type":"update","timestamp":..., "payload":{"symbol":"btcusdt","value":68127.41,"timestamp":...}}`
 
 ## Configuration
 
 All configuration via environment variables with sensible defaults:
+
 
 | Variable             | Default                                                | Description                                            |
 | -------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
@@ -144,15 +148,18 @@ All configuration via environment variables with sensible defaults:
 | `MARKET_SLUG_PREFIX` | `btc-updown-5m`                                        | Market slug prefix for discovery                       |
 | `DATA_DIR`           | `./data`                                               | Directory for SQLite trade database                    |
 
+
 ## Dependencies
 
-| Library                          | Version | Purpose                                               |
-| -------------------------------- | ------- | ----------------------------------------------------- |
-| `GoPolymarket/polymarket-go-sdk` | v1.1.0  | CLOB WebSocket client (orderbook, trades, events)     |
-| `gorilla/websocket`              | v1.5.3  | RTDS WebSocket (pulled in by SDK, also used directly) |
-| `charmbracelet/log`              | v1.0.0  | Colored structured logging for development            |
-| `modernc.org/sqlite`             | v1.47.0 | Pure-Go SQLite driver (no CGo, cross-compile friendly)|
-| `log/slog` (stdlib)              | Go 1.25 | JSON structured logging for production                |
+
+| Library                          | Version | Purpose                                                |
+| -------------------------------- | ------- | ------------------------------------------------------ |
+| `GoPolymarket/polymarket-go-sdk` | v1.1.0  | CLOB WebSocket client (orderbook, trades, events)      |
+| `gorilla/websocket`              | v1.5.3  | RTDS WebSocket (pulled in by SDK, also used directly)  |
+| `charmbracelet/log`              | v1.0.0  | Colored structured logging for development             |
+| `modernc.org/sqlite`             | v1.47.0 | Pure-Go SQLite driver (no CGo, cross-compile friendly) |
+| `log/slog` (stdlib)              | Go 1.25 | JSON structured logging for production                 |
+
 
 ## Hub (Phase 2) -- Central State Store
 
@@ -182,12 +189,14 @@ typed Go values and calls these methods:
 
 ### State components
 
+
 | Component     | Backing structure               | Purpose                                              |
 | ------------- | ------------------------------- | ---------------------------------------------------- |
 | `Orderbook`   | Sorted `[]OrderLevel` per asset | Best bid/ask, mid-price, spread, depth, imbalance    |
 | `PriceBuffer` | Ring buffer (cap=600)           | BTC price history, SMA, linear regression slope      |
 | `MarketState` | `map[slug]*MarketState`         | Market lifecycle, time-to-expiry, resolution outcome |
 | `TradeBuffer` | Ring buffer (cap=200) per asset | VWAP, trade velocity                                 |
+
 
 ### Concurrency model
 
@@ -232,25 +241,30 @@ trades_60s=14 buf=183
 
 ### Background goroutines
 
-| Goroutine | Interval | Purpose |
-|-----------|----------|---------|
-| `marketRotation` | 60s | Discover new 5-min windows, subscribe to their assets, settle expired positions via Gamma API fallback |
-| `snapshotLoop` | 30s | Log hub + risk state summary, persist snapshot to SQLite |
-| `signalLoop` | 5s | Evaluate signals, settle resolved positions, open paper trades via risk manager, persist trades to SQLite |
-| `hourlyStatsLoop` | 1h | Compute and log all-time + last-hour summary, calibration buckets, P&L by hour |
+
+| Goroutine         | Interval | Purpose                                                                                                   |
+| ----------------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `marketRotation`  | 60s      | Discover new 5-min windows, subscribe to their assets, settle expired positions via Gamma API fallback    |
+| `snapshotLoop`    | 30s      | Log hub + risk state summary, persist snapshot to SQLite                                                  |
+| `signalLoop`      | 5s       | Evaluate signals, settle resolved positions, open paper trades via risk manager, persist trades to SQLite |
+| `hourlyStatsLoop` | 1h       | Compute and log all-time + last-hour summary, calibration buckets, P&L by hour                            |
+
 
 ## Signal Engine (Phase 3)
 
 The signal engine evaluates every 5 seconds whether to buy Up or Down.
-It combines three independent signals into a composite trading decision.
+It combines four independent signals into a composite trading decision.
 
 ### Signals
 
-| Signal    | Weight | Input                          | Logic                                                                    |
-| --------- | ------ | ------------------------------ | ------------------------------------------------------------------------ |
-| Momentum  | 0.50   | `BTCPriceSlope(60)`            | BTC rising → Up more likely. Uses `tanh(slope * 2.0)` to map to [-1, +1] |
-| Imbalance | 0.20   | `Orderbook.BidAskImbalance(5)` | More bid depth on Up token → market is bullish                           |
-| Edge      | 0.30   | `sigmoid(slope) - midPrice`    | Divergence between model-predicted prob and market-implied prob          |
+
+| Signal    | Weight | Input                            | Logic                                                                    |
+| --------- | ------ | -------------------------------- | ------------------------------------------------------------------------ |
+| Momentum  | 0.40   | `BTCPriceSlope(60)`              | BTC rising → Up more likely. Uses `tanh(slope * 2.0)` to map to [-1, +1] |
+| Imbalance | 0.15   | `Orderbook.BidAskImbalance(5)`   | More bid depth on Up token → market is bullish                           |
+| Edge      | 0.25   | `sigmoid(slope) - midPrice`      | Divergence between model-predicted prob and market-implied prob          |
+| TradeFlow | 0.20   | `TradeBuffer.BuySellVolume(60s)` | Buy/sell volume ratio on Up token → informed flow detection              |
+
 
 ### Composite decision
 
@@ -267,8 +281,12 @@ The engine only recommends trading when ALL conditions are met:
 
 - Time window: 30s < time_to_expiry < 4m30s (need data, need fills)
 - Data: at least 30 BTC price ticks collected
+- Volatility: BTC price CV (stddev/price) < 0.3% over last 60 ticks
 - Confidence > 0.15 (composite signal strength)
 - Edge > 0.03 (sufficient model-vs-market divergence)
+
+The volatility gate suppresses trading during high-volatility regimes where
+simple momentum signals become unreliable noise.
 
 Decisions that pass all gates are forwarded to the risk manager for Kelly sizing
 and paper trade execution.
@@ -281,6 +299,7 @@ internal/signal/
   momentum.go    BTC price momentum via linear regression slope
   imbalance.go   orderbook bid/ask depth imbalance
   edge.go        market mispricing detector (sigmoid momentum vs implied prob)
+  tradeflow.go   buy/sell volume imbalance from recent trades
   engine.go      composite engine: weighted combination, gates, decision output
 ```
 
@@ -304,13 +323,15 @@ We use quarter Kelly (`f* * 0.25`) to be conservative.
 
 ### Risk limits
 
-| Limit | Default | Purpose |
-|-------|---------|---------|
-| Fractional Kelly | 0.25 | Bet 25% of full Kelly -- reduces variance |
-| Max position | $10 | Cap per single market |
-| Max exposure | $25 | Cap across all open positions |
-| Drawdown limit | 20% | Halt trading if bankroll drops 20% from peak |
-| Min bet | $0.50 | Avoid dust positions |
+
+| Limit            | Default | Purpose                                      |
+| ---------------- | ------- | -------------------------------------------- |
+| Fractional Kelly | 0.25    | Bet 25% of full Kelly -- reduces variance    |
+| Max position     | $10     | Cap per single market                        |
+| Max exposure     | $25     | Cap across all open positions                |
+| Drawdown limit   | 20%     | Halt trading if bankroll drops 20% from peak |
+| Min bet          | $0.50   | Avoid dust positions                         |
+
 
 ### Position lifecycle
 
@@ -324,6 +345,7 @@ We use quarter Kelly (`f* * 0.25`) to be conservative.
 ### Resolution detection
 
 Two mechanisms ensure positions always settle:
+
 - **WebSocket**: Hub's `OnMarketResolved` (primary, matched by slug or winning asset ID)
 - **Gamma API fallback**: Every 60s, expired positions are checked via `Discovery.CheckResolution` -- if the event is closed on the API, the hub is force-resolved and the position settles on the next tick
 
@@ -346,21 +368,28 @@ bot 24/7 on EC2.
 Two tables:
 
 - **trades**: One row per paper trade. Records entry details (price, cost, Kelly,
-  model prob, all signal values, BTC price). Settlement fields (won, pnl, outcome,
-  bankroll_after) are NULL until resolved, then filled via `UPDATE`.
+model prob, all signal values, BTC price). Settlement fields (won, pnl, outcome,
+bankroll_after) are NULL until resolved, then filled via `UPDATE`.
 - **snapshots**: Periodic (30s) hub + risk state: BTC price, trend, market slug,
-  orderbook quotes, bankroll, exposure, win/loss record.
+orderbook quotes, bankroll, exposure, win/loss record.
 
 ### Analytics computed every hour
 
-| Metric | What it tells you |
-|--------|-------------------|
-| Win rate | Basic profitability signal |
-| Profit factor | Gross wins / gross losses (>1.0 = profitable) |
-| Sharpe ratio | Risk-adjusted return, annualized |
-| Max drawdown | Worst peak-to-trough loss |
-| Calibration | When model says 70%, does Up actually win ~70%? |
-| P&L by hour | Which hours of the day are most/least profitable |
+
+| Metric            | What it tells you                                                |
+| ----------------- | ---------------------------------------------------------------- |
+| Win rate          | Basic profitability signal                                       |
+| Profit factor     | Gross wins / gross losses (>1.0 = profitable)                    |
+| Sharpe ratio      | Risk-adjusted return, annualized                                 |
+| Max drawdown      | Worst peak-to-trough loss                                        |
+| Brier score       | Probability calibration (lower = better, 0.25 = random baseline) |
+| Calibration       | When model says 70%, does Up actually win ~70%?                  |
+| P&L by hour       | Which hours of the day are most/least profitable                 |
+| Streak analysis   | Max consecutive wins/losses, current streak                      |
+| Edge buckets      | Does higher predicted edge actually produce more profit?         |
+| Signal win rates  | Per-signal direction correlation with outcomes                   |
+| Time in window    | Win rate by entry timing: early/mid/late in 5-min window         |
+
 
 ### Key queries
 
@@ -371,9 +400,49 @@ See `deploy/EC2-SETUP.md` for ready-made SQL queries.
 
 ```
 internal/store/
-  store.go       schema migration, LogTrade, SettleTrade, LogSnapshot, query methods
+  store.go       schema migration, LogTrade, SettleTrade, LogSnapshot, query methods, RecentTrades API
 internal/stats/
-  stats.go       ComputeSummary, ComputeCalibration, ComputeHourlyPnL, Sharpe ratio
+  stats.go       ComputeSummary, ComputeCalibration, ComputeHourlyPnL, ComputeTimeInWindow, Sharpe ratio
+```
+
+## HTTP Status API
+
+Optional HTTP server enabled by setting `API_PORT` env var. Protected by EC2
+security group (restrict port to your IP only). No TLS needed for personal use.
+
+### Endpoints
+
+| Endpoint   | Description                                                    |
+| ---------- | -------------------------------------------------------------- |
+| `/health`  | Uptime check                                                   |
+| `/status`  | Live BTC price, bankroll, exposure, win/loss, current market   |
+| `/trades`  | Recent trades with entry/settlement details (`?limit=N`)       |
+| `/stats`   | All-time + 24h summary, calibration, streaks, edge buckets, signal win rates, time-in-window |
+
+### Files
+
+```
+internal/api/
+  server.go          HTTP handlers, wired to hub/risk/store/stats
+```
+
+## SNS Alerting
+
+Optional email notifications via AWS SNS. Set `SNS_TOPIC_ARN` env var.
+
+- **Bot startup**: confirmation that the bot is online
+- **Drawdown breaker**: alert when trading is halted due to drawdown limit
+- **Bot crash**: systemd `OnFailure` unit sends SNS on unexpected exit
+
+Uses `aws` CLI via `os/exec` — zero Go SDK dependencies.
+
+### Files
+
+```
+internal/notify/
+  notify.go              async SNS publish via AWS CLI
+deploy/
+  go-tec-alert.service   systemd oneshot triggered on bot crash
 ```
 
 ## EC2 Deployment (Phase 7)
@@ -387,39 +456,60 @@ Target: EC2 `t4g.nano` (ARM Graviton, 512MB RAM, ~$3/mo with savings plan).
 - ECS agent consumes ~200MB on a 512MB instance (40% waste)
 - Fargate costs ~$9-12/mo vs ~$3-4/mo for equivalent EC2
 
+### AWS Infrastructure
+
+- **Region**: us-east-1 (lowest latency to Polymarket infrastructure)
+- **Instance**: t4g.nano, Amazon Linux 2023 ARM64, public subnet (default VPC)
+- **IAM role**: `go-tec-bot-role` with inline policy: `sns:Publish` + `s3:PutObject`
+- **Security group**: SSH (22) + API (8080) from your IP only, all outbound allowed
+- **EBS**: gp3 8GB, `DeleteOnTermination=No` (protects trade database)
+- **Termination protection**: enabled
+- **Credit spec**: standard (no surprise burst charges)
+- **No NAT Gateway**: public subnet with Internet Gateway (default VPC has this)
+- **No Docker**: single binary, systemd manages the process directly
+
 ### Build and deploy
 
-```
+```bash
+# Build locally
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bot ./cmd/bot
-scp bot deploy/go-tec.service deploy/setup.sh ec2-user@<ip>:~/
-ssh ec2-user@<ip> "bash setup.sh"
+
+# Copy files to EC2
+scp bot deploy/go-tec.service deploy/go-tec-alert.service deploy/setup.sh ec2-user@<ip>:~/
+
+# SSH in and run setup
+ssh ec2-user@<ip>
+SNS_TOPIC_ARN=arn:aws:sns:us-east-1:021363511692:go-tec-alerts bash ~/setup.sh
 ```
 
 ### Runtime
 
-- **Process management**: systemd with `Restart=always`
+- **Process management**: systemd with `Restart=always`, `OnFailure=go-tec-alert.service`
 - **Storage**: SQLite on EBS (`/opt/go-tec/data/trades.db`)
-- **Backups**: Optional daily cron to S3
+- **Backups**: Daily cron to S3 at 04:00 UTC
 - **Logs**: `journalctl -u go-tec -f` (JSON format in production)
+- **API**: `curl http://<ip>:8080/status`
 
 ### Files
 
 ```
-Dockerfile                       multi-stage ARM64 build (distroless base)
 deploy/
-  go-tec.service                 systemd unit
+  go-tec.service                 systemd unit with OnFailure alert
+  go-tec-alert.service           crash notification via SNS
   setup.sh                       EC2 setup automation
-  EC2-SETUP.md                   full deployment walkthrough
 ```
 
 ### Cost estimate
 
-| Resource | Monthly |
-|----------|---------|
-| t4g.nano on-demand | ~$3.07 |
-| 8 GB gp3 EBS | ~$0.64 |
-| S3 backups | ~$0.01 |
-| **Total** | **~$3.72** |
+
+| Resource           | Monthly    |
+| ------------------ | ---------- |
+| t4g.nano on-demand | ~$3.07     |
+| 8 GB gp3 EBS       | ~$0.64     |
+| S3 backups         | ~$0.01     |
+| SNS alerts         | ~$0.00     |
+| **Total**          | **~$3.72** |
+
 
 ## Full Data Flow
 
@@ -463,20 +553,21 @@ deploy/
 ## Known Limitations & Future Improvements
 
 - **Signal naivete**: The momentum/imbalance/edge signals are a starting point.
-  After collecting a week of data, analyze calibration and P&L by hour to identify
-  where the model is weak. Possible improvements: volatility regime filter, VWAP
-  divergence signal, multi-timeframe momentum.
+After collecting a week of data, analyze calibration and P&L by hour to identify
+where the model is weak. Possible improvements: volatility regime filter, VWAP
+divergence signal, multi-timeframe momentum.
 - **No real execution**: Phase 5 (wallet auth, CLOB order placement) is intentionally
-  deferred until paper trading demonstrates a consistent edge over 1,000+ markets.
+deferred until paper trading demonstrates a consistent edge over 1,000+ markets.
 - **Single-market focus**: Currently trades only BTC 5-min. The architecture supports
-  other Polymarket markets with minimal changes to the discovery layer.
+other Polymarket markets with minimal changes to the discovery layer.
 - **No WebSocket reconnection handling**: If the RTDS or CLOB WS drops, the bot
-  currently loses data until restart. Adding automatic reconnection with backoff
-  would improve uptime.
+currently loses data until restart. Adding automatic reconnection with backoff
+would improve uptime.
 - **Backtest from SQLite**: The snapshots table contains enough data to replay
-  historical market conditions and test new signal parameters offline.
+historical market conditions and test new signal parameters offline.
 
 ## Phases
+
 
 | Phase | Status   | Description                                                                  |
 | ----- | -------- | ---------------------------------------------------------------------------- |
@@ -486,4 +577,7 @@ deploy/
 | 4     | COMPLETE | Risk model: Kelly sizing, paper P&L, exposure limits, drawdown breaker       |
 | 5     | SKIPPED  | Execution engine -- deferred until paper trading proves edge                 |
 | 6     | COMPLETE | SQLite trade log, performance analytics, hourly stats                        |
-| 7     | COMPLETE | EC2 deployment: Dockerfile, systemd, setup script, S3 backup                |
+| 7     | COMPLETE | EC2 deployment: systemd, setup script, S3 backup, SNS alerts                 |
+| 8     | COMPLETE | HTTP status API: /health, /status, /trades, /stats                           |
+
+

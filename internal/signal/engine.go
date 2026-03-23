@@ -14,6 +14,8 @@ type EngineConfig struct {
 	MinExpiry     time.Duration // don't trade if expiry < this (default 30s, no fills possible)
 	MinConfidence float64       // minimum composite confidence to trade (default 0.15)
 	MinEdge       float64       // minimum model-vs-market edge to trade (default 0.03)
+	MaxVolatility float64       // max BTC price CV before suppressing trades (default 0.003 = 0.3%)
+	VolWindow     int           // window for volatility calculation in ticks (default 60)
 }
 
 func DefaultEngineConfig() EngineConfig {
@@ -23,6 +25,8 @@ func DefaultEngineConfig() EngineConfig {
 		MinExpiry:     30 * time.Second,
 		MinConfidence: 0.15,
 		MinEdge:       0.03,
+		MaxVolatility: 0.003,
+		VolWindow:     60,
 	}
 }
 
@@ -43,9 +47,10 @@ func NewEngine(logger *slog.Logger, cfg EngineConfig) *Engine {
 	edge := NewEdge()
 	return &Engine{
 		signals: []weightedEval{
-			{eval: NewMomentum(), weight: 0.50},
-			{eval: NewImbalance(), weight: 0.20},
-			{eval: edge, weight: 0.30},
+			{eval: NewMomentum(), weight: 0.40},
+			{eval: NewImbalance(), weight: 0.15},
+			{eval: edge, weight: 0.25},
+			{eval: NewTradeFlow(), weight: 0.20},
 		},
 		edge:   edge,
 		cfg:    cfg,
@@ -84,6 +89,17 @@ func (e *Engine) Evaluate(h *hub.Hub) Decision {
 	if h.BTCPriceCount() < e.cfg.MinDataPoints {
 		dec.Reason = "insufficient price data"
 		return dec
+	}
+
+	// Volatility gate: suppress in high-volatility regimes where
+	// simple momentum signals become unreliable noise
+	btcPrice, _, _ := h.BTCPrice()
+	if stdDev, ok := h.BTCPriceStdDev(e.cfg.VolWindow); ok && btcPrice > 0 {
+		dec.VolatilityCV = stdDev / btcPrice
+		if dec.VolatilityCV > e.cfg.MaxVolatility {
+			dec.Reason = "volatility too high"
+			return dec
+		}
 	}
 
 	// Compute individual signals

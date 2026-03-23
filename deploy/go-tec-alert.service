@@ -1,0 +1,7 @@
+[Unit]
+Description=Send SNS alert when go-tec bot crashes
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/go-tec/.env
+ExecStart=/bin/sh -c 'test -n "$SNS_TOPIC_ARN" && aws sns publish --topic-arn "$SNS_TOPIC_ARN" --subject "[go-tec] Bot crashed" --message "The go-tec bot exited unexpectedly at $(date -u). Check: journalctl -u go-tec -n 100"'

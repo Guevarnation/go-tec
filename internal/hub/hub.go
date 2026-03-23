@@ -174,6 +174,22 @@ func (h *Hub) ImpliedProbability(upTokenID string) (float64, bool) {
 	return ob.MidPrice()
 }
 
+func (h *Hub) BTCPriceStdDev(window int) (float64, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.priceBuf.StdDev(window)
+}
+
+func (h *Hub) TradeBuySellVolume(assetID string, window time.Duration) (buyVol, sellVol float64) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	tb, ok := h.trades[assetID]
+	if !ok {
+		return 0, 0
+	}
+	return tb.BuySellVolume(window)
+}
+
 // ---------------------------------------------------------------------------
 // Market state management
 // ---------------------------------------------------------------------------

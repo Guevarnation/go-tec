@@ -82,6 +82,9 @@ type ResolutionChecker interface {
 // SettleFunc is called after each position settlement for external persistence.
 type SettleFunc func(slug string, won bool, pnl float64, outcome string, bankrollAfter float64)
 
+// HaltFunc is called when the drawdown breaker triggers.
+type HaltFunc func(drawdown, bankroll, peak float64)
+
 // Manager sizes positions, tracks paper P&L, and enforces risk limits.
 type Manager struct {
 	mu sync.Mutex
@@ -98,6 +101,7 @@ type Manager struct {
 	halted   bool
 
 	OnSettle SettleFunc // optional callback for settlement persistence
+	OnHalt   HaltFunc   // optional callback for drawdown breaker alert
 	logger   *slog.Logger
 }
 
@@ -277,6 +281,9 @@ func (m *Manager) SettleResolved(h *hub.Hub) {
 				"bankroll", fmt.Sprintf("$%.2f", m.bankroll),
 				"peak", fmt.Sprintf("$%.2f", m.peakBankroll),
 			)
+			if m.OnHalt != nil {
+				m.OnHalt(drawdown, m.bankroll, m.peakBankroll)
+			}
 		}
 	}
 }

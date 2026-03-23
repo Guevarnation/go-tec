@@ -12,7 +12,9 @@ set -euo pipefail
 BOT_DIR="/opt/go-tec"
 DATA_DIR="${BOT_DIR}/data"
 SERVICE_FILE="/etc/systemd/system/go-tec.service"
+ALERT_SERVICE_FILE="/etc/systemd/system/go-tec-alert.service"
 S3_BUCKET="${GO_TEC_S3_BUCKET:-}"
+SNS_TOPIC="${SNS_TOPIC_ARN:-}"
 
 echo "==> Creating bot directory"
 sudo mkdir -p "${BOT_DIR}" "${DATA_DIR}"
@@ -22,8 +24,15 @@ echo "==> Installing binary"
 cp ~/bot "${BOT_DIR}/bot"
 chmod +x "${BOT_DIR}/bot"
 
-echo "==> Installing systemd service"
+# Write .env file for SNS_TOPIC_ARN (used by both the bot and the alert service)
+if [ -n "${SNS_TOPIC}" ]; then
+    echo "SNS_TOPIC_ARN=${SNS_TOPIC}" > "${BOT_DIR}/.env"
+    echo "==> SNS topic configured: ${SNS_TOPIC}"
+fi
+
+echo "==> Installing systemd services"
 sudo cp ~/go-tec.service "${SERVICE_FILE}"
+sudo cp ~/go-tec-alert.service "${ALERT_SERVICE_FILE}"
 sudo systemctl daemon-reload
 sudo systemctl enable go-tec
 sudo systemctl start go-tec

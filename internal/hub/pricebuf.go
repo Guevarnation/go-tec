@@ -1,5 +1,7 @@
 package hub
 
+import "math"
+
 type priceEntry struct {
 	Price     float64
 	Timestamp int64
@@ -80,4 +82,19 @@ func (b *PriceBuffer) Slope(window int) (float64, bool) {
 		return 0, false
 	}
 	return (nf*sumXY - sumX*sumY) / denom, true
+}
+
+// StdDev returns the standard deviation of prices over the last `window` entries.
+func (b *PriceBuffer) StdDev(window int) (float64, bool) {
+	n := min(window, b.len)
+	if n < 2 {
+		return 0, false
+	}
+	mean, _ := b.SMA(n)
+	var sumSq float64
+	for i := 0; i < n; i++ {
+		d := b.at(i).Price - mean
+		sumSq += d * d
+	}
+	return math.Sqrt(sumSq / float64(n-1)), true
 }

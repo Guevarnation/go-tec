@@ -43,15 +43,16 @@ type Evaluator interface {
 // Decision is the composite output of the signal engine.
 // The risk manager consumes this to determine position sizing.
 type Decision struct {
-	Market      string
-	Dir         Direction
-	Confidence  float64   // 0.0 to 1.0 (how certain)
-	Edge        float64   // expected value edge abs(model_prob - market_prob)
-	ModelProb   float64   // model-predicted probability of Up winning (0.0 to 1.0)
-	Signals     []Score   // individual signal contributions
-	ShouldTrade bool
-	Reason      string
-	EvaluatedAt time.Time
+	Market       string
+	Dir          Direction
+	Confidence   float64   // 0.0 to 1.0 (how certain)
+	Edge         float64   // expected value edge abs(model_prob - market_prob)
+	ModelProb    float64   // model-predicted probability of Up winning (0.0 to 1.0)
+	VolatilityCV float64  // BTC price coefficient of variation at evaluation time
+	Signals      []Score  // individual signal contributions
+	ShouldTrade  bool
+	Reason       string
+	EvaluatedAt  time.Time
 }
 
 func (d Decision) String() string {

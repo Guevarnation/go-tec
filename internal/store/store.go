@@ -42,27 +42,29 @@ func (s *Store) Close() error {
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS trades (
-			id             INTEGER PRIMARY KEY AUTOINCREMENT,
-			slug           TEXT NOT NULL,
-			direction      TEXT NOT NULL,
-			token_id       TEXT NOT NULL,
-			entry_price    REAL NOT NULL,
-			shares         REAL NOT NULL,
-			cost           REAL NOT NULL,
-			kelly_frac     REAL NOT NULL,
-			model_prob     REAL NOT NULL,
-			confidence     REAL NOT NULL,
-			edge           REAL NOT NULL,
-			momentum       REAL,
-			imbalance      REAL,
-			edge_signal    REAL,
-			btc_price      REAL,
-			opened_at      DATETIME NOT NULL,
-			won            INTEGER,
-			pnl            REAL,
-			outcome        TEXT,
-			settled_at     DATETIME,
-			bankroll_after REAL
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			slug            TEXT NOT NULL,
+			direction       TEXT NOT NULL,
+			token_id        TEXT NOT NULL,
+			entry_price     REAL NOT NULL,
+			shares          REAL NOT NULL,
+			cost            REAL NOT NULL,
+			kelly_frac      REAL NOT NULL,
+			model_prob      REAL NOT NULL,
+			confidence      REAL NOT NULL,
+			edge            REAL NOT NULL,
+			momentum        REAL,
+			imbalance       REAL,
+			edge_signal     REAL,
+			tradeflow       REAL,
+			btc_price       REAL,
+			btc_volatility  REAL,
+			opened_at       DATETIME NOT NULL,
+			won             INTEGER,
+			pnl             REAL,
+			outcome         TEXT,
+			settled_at      DATETIME,
+			bankroll_after  REAL
 		);
 
 		CREATE TABLE IF NOT EXISTS snapshots (
@@ -93,37 +95,47 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_trades_settled ON trades(settled_at);
 		CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(ts);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Best-effort migrations for existing databases (columns may already exist)
+	s.db.Exec(`ALTER TABLE trades ADD COLUMN tradeflow REAL`)
+	s.db.Exec(`ALTER TABLE trades ADD COLUMN btc_volatility REAL`)
+
+	return nil
 }
 
 // TradeRecord represents a paper trade for persistence.
 type TradeRecord struct {
-	Slug       string
-	Direction  string
-	TokenID    string
-	EntryPrice float64
-	Shares     float64
-	Cost       float64
-	KellyFrac  float64
-	ModelProb  float64
-	Confidence float64
-	Edge       float64
-	Momentum   float64
-	Imbalance  float64
-	EdgeSignal float64
-	BTCPrice   float64
-	OpenedAt   time.Time
+	Slug          string
+	Direction     string
+	TokenID       string
+	EntryPrice    float64
+	Shares        float64
+	Cost          float64
+	KellyFrac     float64
+	ModelProb     float64
+	Confidence    float64
+	Edge          float64
+	Momentum      float64
+	Imbalance     float64
+	EdgeSignal    float64
+	TradeFlow     float64
+	BTCPrice      float64
+	BTCVolatility float64
+	OpenedAt      time.Time
 }
 
 func (s *Store) LogTrade(t TradeRecord) error {
 	_, err := s.db.Exec(`
 		INSERT INTO trades (slug, direction, token_id, entry_price, shares, cost,
 			kelly_frac, model_prob, confidence, edge, momentum, imbalance,
-			edge_signal, btc_price, opened_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			edge_signal, tradeflow, btc_price, btc_volatility, opened_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Slug, t.Direction, t.TokenID, t.EntryPrice, t.Shares, t.Cost,
 		t.KellyFrac, t.ModelProb, t.Confidence, t.Edge, t.Momentum, t.Imbalance,
-		t.EdgeSignal, t.BTCPrice, t.OpenedAt,
+		t.EdgeSignal, t.TradeFlow, t.BTCPrice, t.BTCVolatility, t.OpenedAt,
 	)
 	return err
 }
@@ -181,24 +193,30 @@ func (s *Store) LogSnapshot(r SnapshotRecord) error {
 // --- Query methods for stats computation ---
 
 type SettledTrade struct {
-	Slug       string
-	Direction  string
-	EntryPrice float64
-	Cost       float64
-	ModelProb  float64
-	Confidence float64
-	Edge       float64
-	Momentum   float64
-	Won        bool
-	PnL        float64
-	OpenedAt   time.Time
-	SettledAt  time.Time
+	Slug          string
+	Direction     string
+	EntryPrice    float64
+	Cost          float64
+	ModelProb     float64
+	Confidence    float64
+	Edge          float64
+	Momentum      float64
+	Imbalance     float64
+	EdgeSignal    float64
+	TradeFlow     float64
+	BTCVolatility float64
+	Won           bool
+	PnL           float64
+	OpenedAt      time.Time
+	SettledAt     time.Time
 }
 
 func (s *Store) SettledTradesSince(since time.Time) ([]SettledTrade, error) {
 	rows, err := s.db.Query(`
 		SELECT slug, direction, entry_price, cost, model_prob, confidence, edge,
-			momentum, won, pnl, opened_at, settled_at
+			COALESCE(momentum, 0), COALESCE(imbalance, 0), COALESCE(edge_signal, 0),
+			COALESCE(tradeflow, 0), COALESCE(btc_volatility, 0),
+			won, pnl, opened_at, settled_at
 		FROM trades WHERE settled_at IS NOT NULL AND settled_at >= ?
 		ORDER BY settled_at`, since)
 	if err != nil {
@@ -212,6 +230,7 @@ func (s *Store) SettledTradesSince(since time.Time) ([]SettledTrade, error) {
 		var wonInt int
 		if err := rows.Scan(&t.Slug, &t.Direction, &t.EntryPrice, &t.Cost,
 			&t.ModelProb, &t.Confidence, &t.Edge, &t.Momentum,
+			&t.Imbalance, &t.EdgeSignal, &t.TradeFlow, &t.BTCVolatility,
 			&wonInt, &t.PnL, &t.OpenedAt, &t.SettledAt); err != nil {
 			return nil, err
 		}
@@ -223,4 +242,57 @@ func (s *Store) SettledTradesSince(since time.Time) ([]SettledTrade, error) {
 
 func (s *Store) AllSettledTrades() ([]SettledTrade, error) {
 	return s.SettledTradesSince(time.Time{})
+}
+
+// --- API query methods ---
+
+// TradeRow represents a trade for API responses (handles unsettled trades).
+type TradeRow struct {
+	Slug       string    `json:"slug"`
+	Direction  string    `json:"direction"`
+	EntryPrice float64   `json:"entry_price"`
+	Shares     float64   `json:"shares"`
+	Cost       float64   `json:"cost"`
+	KellyFrac  float64   `json:"kelly_frac"`
+	ModelProb  float64   `json:"model_prob"`
+	Confidence float64   `json:"confidence"`
+	Edge       float64   `json:"edge"`
+	BTCPrice   float64   `json:"btc_price"`
+	OpenedAt   time.Time `json:"opened_at"`
+	Settled    bool      `json:"settled"`
+	Won        *bool     `json:"won"`
+	PnL        *float64  `json:"pnl"`
+	Outcome    string    `json:"outcome,omitempty"`
+}
+
+func (s *Store) RecentTrades(limit int) ([]TradeRow, error) {
+	rows, err := s.db.Query(`
+		SELECT slug, direction, entry_price, shares, cost, kelly_frac, model_prob,
+			confidence, edge, COALESCE(btc_price, 0), opened_at,
+			COALESCE(won, -1), COALESCE(pnl, 0), COALESCE(outcome, ''),
+			settled_at IS NOT NULL
+		FROM trades ORDER BY opened_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var trades []TradeRow
+	for rows.Next() {
+		var t TradeRow
+		var wonInt int
+		var pnl float64
+		if err := rows.Scan(&t.Slug, &t.Direction, &t.EntryPrice, &t.Shares,
+			&t.Cost, &t.KellyFrac, &t.ModelProb, &t.Confidence, &t.Edge,
+			&t.BTCPrice, &t.OpenedAt, &wonInt, &pnl, &t.Outcome, &t.Settled); err != nil {
+			return nil, err
+		}
+		if t.Settled {
+			w := wonInt == 1
+			t.Won = &w
+			t.PnL = &pnl
+		}
+		trades = append(trades, t)
+	}
+	return trades, rows.Err()
 }
