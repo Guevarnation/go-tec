@@ -18,8 +18,9 @@ type ManagerConfig struct {
 	FractionalKelly float64 // fraction of full Kelly to bet (default 0.25 = quarter Kelly)
 	MaxPosition     float64 // max cost per single market (default $10)
 	MaxExposure     float64 // max total cost across all open positions (default $25)
-	DrawdownLimit   float64 // halt trading at this % drawdown from peak (default 0.20)
+	DrawdownLimit   float64 // halt trading at this % drawdown from peak (default 0.15)
 	MinBet          float64 // minimum bet cost to avoid dust positions (default $0.50)
+	MinEntryPrice   float64 // reject asks below this price -- cheap tokens signal low probability (default 0.45)
 }
 
 func DefaultManagerConfig() ManagerConfig {
@@ -28,8 +29,9 @@ func DefaultManagerConfig() ManagerConfig {
 		FractionalKelly: 0.25,
 		MaxPosition:     10.0,
 		MaxExposure:     25.0,
-		DrawdownLimit:   0.20,
+		DrawdownLimit:   0.15,
 		MinBet:          0.50,
+		MinEntryPrice:   0.45,
 	}
 }
 
@@ -159,6 +161,11 @@ func (m *Manager) Evaluate(dec signal.Decision, h *hub.Hub) *Order {
 	}
 	entryPrice, ok := ob.BestAsk()
 	if !ok || entryPrice <= 0 || entryPrice >= 1 {
+		return nil
+	}
+
+	// Reject cheap asks -- tokens priced below threshold signal low win probability
+	if entryPrice < m.cfg.MinEntryPrice {
 		return nil
 	}
 

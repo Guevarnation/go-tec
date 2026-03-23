@@ -23,8 +23,8 @@ func DefaultEngineConfig() EngineConfig {
 		MinDataPoints: 30,
 		MaxExpiry:     4*time.Minute + 30*time.Second,
 		MinExpiry:     30 * time.Second,
-		MinConfidence: 0.15,
-		MinEdge:       0.03,
+		MinConfidence: 0.20,
+		MinEdge:       0.05,
 		MaxVolatility: 0.003,
 		VolWindow:     60,
 	}
@@ -47,10 +47,10 @@ func NewEngine(logger *slog.Logger, cfg EngineConfig) *Engine {
 	edge := NewEdge()
 	return &Engine{
 		signals: []weightedEval{
-			{eval: NewMomentum(), weight: 0.40},
-			{eval: NewImbalance(), weight: 0.15},
-			{eval: edge, weight: 0.25},
-			{eval: NewTradeFlow(), weight: 0.20},
+			{eval: NewMomentum(), weight: 0.55},
+			{eval: NewImbalance(), weight: 0.05},
+			{eval: edge, weight: 0.30},
+			{eval: NewTradeFlow(), weight: 0.10},
 		},
 		edge:   edge,
 		cfg:    cfg,
