@@ -21,6 +21,7 @@ type ManagerConfig struct {
 	DrawdownLimit   float64       // halt trading at this % drawdown from peak (default 0.25)
 	MinBet          float64       // minimum bet cost to avoid dust positions (default $0.50)
 	MinEntryPrice   float64       // reject asks below this price -- cheap tokens signal low probability (default 0.45)
+	MaxEntryPrice   float64       // reject asks above this price -- expensive entries have bad payoff asymmetry (default 0.55)
 	HaltCooldown    time.Duration // auto-unhalt after this duration to keep collecting data (default 10m)
 }
 
@@ -33,6 +34,7 @@ func DefaultManagerConfig() ManagerConfig {
 		DrawdownLimit:   0.25,
 		MinBet:          0.50,
 		MinEntryPrice:   0.45,
+		MaxEntryPrice:   0.55,
 		HaltCooldown:    10 * time.Minute,
 	}
 }
@@ -185,6 +187,12 @@ func (m *Manager) Evaluate(dec signal.Decision, h *hub.Hub) *Order {
 
 	// Reject cheap asks -- tokens priced below threshold signal low win probability
 	if entryPrice < m.cfg.MinEntryPrice {
+		return nil
+	}
+
+	// Reject expensive asks -- entry price > 0.55 means bad payoff asymmetry
+	// (risk more than you win). Data: cheap entries +$10.90 PnL, expensive -$18.09
+	if m.cfg.MaxEntryPrice > 0 && entryPrice > m.cfg.MaxEntryPrice {
 		return nil
 	}
 

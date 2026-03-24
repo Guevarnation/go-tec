@@ -261,10 +261,9 @@ It combines four independent signals into a composite trading decision.
 
 | Signal    | Weight | Input                            | Logic                                                                    |
 | --------- | ------ | -------------------------------- | ------------------------------------------------------------------------ |
-| Momentum  | 0.55   | `BTCPriceSlope(60)`              | BTC rising → Up more likely. Uses `tanh(slope * 1.0)` to map to [-1, +1] |
-| Imbalance | 0.05   | `Orderbook.BidAskImbalance(5)`   | More bid depth on Up token → market is bullish                           |
+| Momentum  | 0.60   | `BTCPriceSlope(60)`              | BTC rising → Up more likely. Uses `tanh(slope * 1.0)`, capped at ±0.50 to prevent expensive entries |
 | Edge      | 0.30   | `sigmoid(slope*1.0) - midPrice`  | Divergence between model-predicted prob and market-implied prob. Model prob capped at [0.20, 0.80] |
-| TradeFlow | 0.10   | Up vs Down token total volume    | Compares trading activity on Up token vs Down token (v3: fixed from broken buy/sell ratio) |
+| TradeFlow | 0.10   | Up vs Down token total volume    | Contrarian: more Down volume → bullish signal (v3: fixed, v4: inverted, v5: kept) |
 
 
 ### Composite decision
@@ -285,7 +284,10 @@ The engine only recommends trading when ALL conditions are met:
 - Volatility: BTC price CV (stddev/price) < 0.3% over last 60 ticks
 - Confidence > 0.20 (composite signal strength)
 - Edge > 0.05 (sufficient model-vs-market divergence)
-- Edge < 0.15 (reject overconfident signals — v3: data showed large-edge trades lose money)
+- Edge < 0.10 (reject overconfident signals — v3/v4: data showed large-edge trades lose money)
+- Entry price between $0.45 and $0.55 (payoff asymmetry filter — v5: expensive entries lose money)
+- Momentum magnitude ≤ 0.50 (strong momentum = market already moved = expensive entry)
+- Hour of day not in skip list (hours 3-6, 15-21 UTC consistently negative P&L)
 
 The volatility gate suppresses trading during high-volatility regimes where
 simple momentum signals become unreliable noise. The MaxEdge gate (new in v3)
@@ -336,6 +338,7 @@ We use quarter Kelly (`f* * 0.25`) to be conservative.
 | Drawdown limit   | 25%     | Halt trading if bankroll drops 25% from peak    |
 | Min bet          | $0.50   | Avoid dust positions                            |
 | Min entry price  | $0.45   | Reject cheap tokens (low implied probability)   |
+| Max entry price  | $0.55   | Reject expensive tokens (bad payoff asymmetry)  |
 | Halt cooldown    | 10 min  | Auto-unhalt after cooldown for data collection  |
 
 
@@ -578,8 +581,8 @@ deploy/
                          ┌──────────────┐
                          │ Signal Engine│
                          │ momentum     │
-                         │ imbalance    │
                          │ edge         │
+                         │ tradeflow    │
                          └──────┬───────┘
                                 │ Decision
                                 ▼

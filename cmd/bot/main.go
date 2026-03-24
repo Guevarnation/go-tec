@@ -26,7 +26,7 @@ import (
 
 // BotVersion tracks the iteration of the trading model for comparing
 // performance across deployments. Bump this on each significant change.
-const BotVersion = "v4"
+const BotVersion = "v5"
 
 func newLogger(cfg *config.Config) *slog.Logger {
 	if cfg.LogFormat == "json" {

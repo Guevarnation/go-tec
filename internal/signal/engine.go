@@ -18,6 +18,7 @@ type EngineConfig struct {
 	MaxVolatility float64       // max BTC price CV before suppressing trades (default 0.003 = 0.3%)
 	VolWindow     int           // window for volatility calculation in ticks (default 60)
 	SkipHoursUTC  map[int]bool  // UTC hours to skip trading (data shows consistent losses)
+	MaxMomentum   float64       // cap momentum magnitude — strong momentum = expensive entry = bad payoff (default 0.50)
 }
 
 func DefaultEngineConfig() EngineConfig {
@@ -31,8 +32,10 @@ func DefaultEngineConfig() EngineConfig {
 		MaxVolatility: 0.003,
 		VolWindow:     60,
 		SkipHoursUTC: map[int]bool{
+			3: true, 4: true, 5: true, 6: true,
 			15: true, 16: true, 17: true, 18: true, 19: true, 20: true, 21: true,
 		},
+		MaxMomentum: 0.50,
 	}
 }
 
@@ -53,8 +56,7 @@ func NewEngine(logger *slog.Logger, cfg EngineConfig) *Engine {
 	edge := NewEdge()
 	return &Engine{
 		signals: []weightedEval{
-			{eval: NewMomentum(), weight: 0.55},
-			{eval: NewImbalance(), weight: 0.05},
+			{eval: NewMomentum(), weight: 0.60},
 			{eval: edge, weight: 0.30},
 			{eval: NewTradeFlow(), weight: 0.10},
 		},
@@ -120,6 +122,11 @@ func (e *Engine) Evaluate(h *hub.Hub) Decision {
 
 	for _, ws := range e.signals {
 		score := ws.eval.Evaluate(h, ms)
+		// Cap momentum magnitude — strong momentum trades have high entry prices
+		// and bad payoff asymmetry despite higher WR (data: moderate=+$6.52, strong=-$13.70)
+		if score.Name == "momentum" && e.cfg.MaxMomentum > 0 {
+			score.Value = clamp(score.Value, -e.cfg.MaxMomentum, e.cfg.MaxMomentum)
+		}
 		dec.Signals = append(dec.Signals, score)
 		weightedSum += score.Value * ws.weight
 		totalWeight += ws.weight

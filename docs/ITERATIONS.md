@@ -187,8 +187,9 @@ WHERE bot_version='v3' AND settled_at IS NOT NULL ORDER BY edge DESC LIMIT 20;
 
 ## v4 — Signal Inversions + Hour Filter + Tighter MaxEdge
 
-**Deployed**: 2026-03-23 (pending deploy)
-**Status**: Built locally, ready to deploy
+**Deployed**: 2026-03-24 03:05 UTC
+**Halted**: 2026-03-24 ~16:30 UTC (replaced by v5)
+**Duration**: ~13 hours active trading
 
 ### Changes from v3
 | Parameter | v3 | v4 | Rationale |
@@ -211,8 +212,93 @@ WHERE bot_version='v3' AND settled_at IS NOT NULL ORDER BY edge DESC LIMIT 20;
 - Hour filter avoids ~$100+ in losses from consistently unprofitable UTC afternoon/evening hours
 - Combined effect: higher WR, lower loss rate, positive profit factor
 
+### Results (95 trades, 13 hours)
+
+| Metric | Value |
+|--------|-------|
+| Total trades | 95 |
+| Wins / Losses | 57W / 38L |
+| Win rate | 60.0% |
+| Total PnL | -$7.18 |
+| Avg win | +$1.62 |
+| Avg loss | -$2.62 |
+| Profit factor | ~0.75 |
+| Final bankroll | $61.07 |
+
+### Key Findings (v4)
+1. **Hour filter working**: zero trades in hours 15-21, confirmed by DB
+2. **MaxEdge 0.10 working**: all 95 trades in 0.05-0.10 bucket, no leaks
+3. **BUY_UP profitable, BUY_DOWN bleeding**: BUY_UP 69% WR, +$11.11 vs BUY_DOWN 52% WR, -$18.29
+4. **Entry price is the key variable**: cheap entries (<0.55) have 62% WR, +$10.90 PnL; expensive (0.55+) have 58% WR, -$18.09
+5. **BUY_UP cheap (<0.55) is the golden trade**: 83% WR, +$14.62 over 12 trades
+6. **Imbalance still inverted after double-inversion**: proven noise across 4 versions — no real signal
+7. **TradeFlow inversion neutralized it**: was 49/78% split, now 60/60% — removed harm but gained nothing
+8. **Strong momentum loses money despite higher WR**: 62% WR but -$13.70 (expensive entries); moderate (0.2-0.5) has 57% WR but +$6.52
+9. **Low confidence trades are most profitable**: <0.25 conf has 62% WR, +$5.85; 0.50+ conf has 64% WR, -$6.28
+10. **Hours 3-6 UTC also unprofitable**: 27 trades, 44% WR, -$19.62 — should be added to skip list
+11. **Structural issue**: losses 1.6x bigger than wins — need 62% WR to break even, not just 60%
+12. **Root cause is payoff asymmetry**: at entry price 0.60, risk $0.60 to win $0.40 — only cheap entries have favorable math
+
+---
+
+## v5 — Payoff Asymmetry Fix + Imbalance Removal + Momentum Cap
+
+**Deployed**: 2026-03-24 ~16:30 UTC
+**Status**: Running
+
+### Changes from v4
+| Parameter | v4 | v5 | Rationale |
+|-----------|----|----|-----------|
+| MaxEntryPrice | none | **0.55** | Cheap entries (<0.55) have +$10.90 PnL, expensive -$18.09. Caps payoff asymmetry |
+| Imbalance weight | 0.05 | **0.00 (removed)** | Still inverted after double-inversion — proven noise across 4 versions |
+| Momentum weight | 0.55 | **0.60** | Absorbed imbalance's weight. Strongest signal (17% separation in v4) |
+| MaxMomentum | none | **0.50** | Strong momentum (>0.5) has 62% WR but -$13.70 PnL; moderate is +$6.52 |
+| SkipHoursUTC | 15-21 | **3-6, 15-21** | Hours 3-6 had 44% WR, -$19.62 in v4 — consistently unprofitable |
+
+### Architecture Changes
+- **`engine.go`**: Removed imbalance from weighted signals, added `MaxMomentum` config field, caps momentum signal magnitude before weighting. Hours 3-6 added to skip list.
+- **`manager.go`**: Added `MaxEntryPrice` field (default 0.55), rejects entry prices above threshold after MinEntryPrice check. Entry price now gated to [0.45, 0.55] band.
+- **`main.go`**: BotVersion "v4" → "v5"
+
+### Hypothesis
+- MaxEntryPrice 0.55 eliminates the structural payoff problem: only trade when risk/reward is favorable
+- Removing imbalance stops a noise signal from corrupting the composite (4 versions of evidence)
+- Momentum cap prevents high-momentum → expensive entry → bad payoff pipeline
+- Narrower hour window avoids ~$20 more in losses from hours 3-6
+- Combined: bot should only trade the "golden" cheap-entry, moderate-momentum setups
+- **Expected trade volume reduction**: fewer but higher quality trades (~4-6/hr in 7-14 UTC window)
+
+### Useful Queries for v5 Analysis
+```sql
+-- v5 only performance
+SELECT bot_version, COUNT(*) trades,
+  SUM(CASE WHEN won=1 THEN 1 ELSE 0 END) wins,
+  ROUND(AVG(CASE WHEN won=1 THEN 1.0 ELSE 0.0 END), 3) wr,
+  ROUND(SUM(pnl), 2) pnl,
+  ROUND(AVG(CASE WHEN won=1 THEN pnl ELSE NULL END), 3) avg_win,
+  ROUND(AVG(CASE WHEN won=0 THEN pnl ELSE NULL END), 3) avg_loss
+FROM trades WHERE settled_at IS NOT NULL AND bot_version='v5';
+
+-- v5 entry price distribution (should all be 0.45-0.55)
+SELECT ROUND(entry_price, 2) price, COUNT(*) n,
+  ROUND(AVG(CASE WHEN won=1 THEN 1.0 ELSE 0.0 END), 3) wr,
+  ROUND(SUM(pnl), 2) pnl
+FROM trades WHERE bot_version='v5' AND settled_at IS NOT NULL
+GROUP BY ROUND(entry_price, 2) ORDER BY price;
+
+-- v5 direction breakdown
+SELECT direction, COUNT(*) trades,
+  ROUND(AVG(CASE WHEN won=1 THEN 1.0 ELSE 0.0 END), 3) wr,
+  ROUND(SUM(pnl), 2) pnl
+FROM trades WHERE bot_version='v5' AND settled_at IS NOT NULL GROUP BY direction;
+
+-- Key metric: is profit factor > 1.0?
+SELECT ROUND(SUM(CASE WHEN won=1 THEN pnl ELSE 0 END) / ABS(SUM(CASE WHEN won=0 THEN pnl ELSE 0 END)), 3) profit_factor
+FROM trades WHERE bot_version='v5' AND settled_at IS NOT NULL;
+```
+
 ### Results
-_Pending — check back after 50+ trades_
+_Pending — check back after 50+ trades (expect ~12 hours at reduced trade rate)_
 
 | Metric | Value |
 |--------|-------|
@@ -221,8 +307,8 @@ _Pending — check back after 50+ trades_
 | Win rate | |
 | Total PnL | |
 | Profit factor | |
-| Brier score | |
-| Max drawdown | |
+| Avg win | |
+| Avg loss | |
 | Final bankroll | |
 
 ---
@@ -287,10 +373,12 @@ _Pending — check back after 50+ trades_
 
 ### Completed (moved from backlog)
 - [x] ~~Fix TradeFlow signal~~ (v3: compares Up vs Down volume; v4: inverted based on 78% WR data)
-- [x] ~~Consider removing imbalance~~ (kept at 5% weight; v4: inverted based on 60% negative WR)
-- [x] ~~Invert imbalance signal~~ (v4: inverted — data confirmed negative imbalance = higher WR)
-- [x] ~~Hour-of-day filter~~ (v4: skip hours 15-21 UTC, all consistently negative P&L)
+- [x] ~~Consider removing imbalance~~ (v5: removed entirely — proven noise across 4 versions)
+- [x] ~~Invert imbalance signal~~ (v4: inverted, v5: removed — still inverted after double-inversion)
+- [x] ~~Hour-of-day filter~~ (v4: skip 15-21 UTC; v5: expanded to skip 3-6 UTC too)
 - [x] ~~Tighten MaxEdge~~ (v4: 0.15 → 0.10, edge 0.10+ still loses money)
 - [x] ~~Track bot version per trade~~ (v3: bot_version column in trades table)
 - [x] ~~Persist bankroll across restarts~~ (v3: LastBankroll from SQLite)
 - [x] ~~Auto-unhalt for data collection~~ (v3: 10min cooldown)
+- [x] ~~Entry price filter~~ (v5: MaxEntryPrice 0.55 — expensive entries have bad payoff asymmetry)
+- [x] ~~Cap momentum magnitude~~ (v5: MaxMomentum 0.50 — strong momentum = expensive entry = losses)
