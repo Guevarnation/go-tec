@@ -24,7 +24,10 @@ go test ./...
 - **Single binary**: All config via env vars, no config files needed
 - **Hub pattern**: Central state store with RWMutex, streams write / signals read
 - **Ring buffers**: Fixed-capacity for price and trade history (no unbounded growth)
-- **Paper trading**: Risk manager tracks virtual $100 bankroll with Kelly sizing
+- **Paper trading**: Risk manager tracks virtual bankroll with Kelly sizing
+- **Bankroll persistence**: Restored from last settled trade in SQLite on restart
+- **Version tracking**: `BotVersion` constant in `cmd/bot/main.go` — bump on each deploy
+- **Auto-unhalt**: Drawdown breaker resets after 10min cooldown for continuous data collection
 
 ## Package layout
 
@@ -47,6 +50,18 @@ go test ./...
 - SQLite WAL mode, single writer connection
 - Signal values always in [-1, +1] range
 - Kelly fraction always applied as quarter-Kelly (0.25x)
+- Model probability capped at [0.20, 0.80] to prevent overconfidence
+- Bot version (`BotVersion` in `cmd/bot/main.go`) must be bumped on each model change
+- Iteration history tracked in `docs/ITERATIONS.md`
+
+## Model tuning notes
+
+- `/stats` queries SQLite (survives restarts, all-time data)
+- `/status` is in-memory only (current session wins/losses/bankroll)
+- Compare versions: `SELECT bot_version, COUNT(*), AVG(pnl) FROM trades WHERE settled_at IS NOT NULL GROUP BY bot_version`
+- Key calibration metric: Brier score < 0.25 = better than random
+- Watch calibration buckets — if high-confidence trades lose, reduce sensitivity
+- Edge bucket analysis — if large-edge trades lose, tighten MaxEdge gate
 
 ## EC2 deployment
 

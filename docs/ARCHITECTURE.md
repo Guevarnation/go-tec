@@ -235,7 +235,8 @@ trades_60s=14 buf=183
 7. Connect CLOB WebSocket, subscribe to all token IDs (events flow to Hub)
 8. Connect RTDS WebSocket, subscribe to crypto prices (BTC prices flow to Hub)
 9. Initialize signal engine and risk manager ($100 paper bankroll)
-10. Start background goroutines (see below)
+10. Restore bankroll from SQLite if prior trades exist (v3: survives restarts)
+11. Start background goroutines (see below)
 11. Block on `ctx.Done()` (SIGINT/SIGTERM triggers graceful shutdown)
 12. Close WebSocket connections and SQLite database, exit
 
@@ -260,10 +261,10 @@ It combines four independent signals into a composite trading decision.
 
 | Signal    | Weight | Input                            | Logic                                                                    |
 | --------- | ------ | -------------------------------- | ------------------------------------------------------------------------ |
-| Momentum  | 0.40   | `BTCPriceSlope(60)`              | BTC rising → Up more likely. Uses `tanh(slope * 2.0)` to map to [-1, +1] |
-| Imbalance | 0.15   | `Orderbook.BidAskImbalance(5)`   | More bid depth on Up token → market is bullish                           |
-| Edge      | 0.25   | `sigmoid(slope) - midPrice`      | Divergence between model-predicted prob and market-implied prob          |
-| TradeFlow | 0.20   | `TradeBuffer.BuySellVolume(60s)` | Buy/sell volume ratio on Up token → informed flow detection              |
+| Momentum  | 0.55   | `BTCPriceSlope(60)`              | BTC rising → Up more likely. Uses `tanh(slope * 1.0)` to map to [-1, +1] |
+| Imbalance | 0.05   | `Orderbook.BidAskImbalance(5)`   | More bid depth on Up token → market is bullish                           |
+| Edge      | 0.30   | `sigmoid(slope*1.0) - midPrice`  | Divergence between model-predicted prob and market-implied prob. Model prob capped at [0.20, 0.80] |
+| TradeFlow | 0.10   | Up vs Down token total volume    | Compares trading activity on Up token vs Down token (v3: fixed from broken buy/sell ratio) |
 
 
 ### Composite decision
@@ -282,11 +283,14 @@ The engine only recommends trading when ALL conditions are met:
 - Time window: 30s < time_to_expiry < 4m30s (need data, need fills)
 - Data: at least 30 BTC price ticks collected
 - Volatility: BTC price CV (stddev/price) < 0.3% over last 60 ticks
-- Confidence > 0.15 (composite signal strength)
-- Edge > 0.03 (sufficient model-vs-market divergence)
+- Confidence > 0.20 (composite signal strength)
+- Edge > 0.05 (sufficient model-vs-market divergence)
+- Edge < 0.15 (reject overconfident signals — v3: data showed large-edge trades lose money)
 
 The volatility gate suppresses trading during high-volatility regimes where
-simple momentum signals become unreliable noise.
+simple momentum signals become unreliable noise. The MaxEdge gate (new in v3)
+rejects trades where the model claims extreme mispricing, which in practice
+indicates overconfidence rather than genuine opportunity.
 
 Decisions that pass all gates are forwarded to the risk manager for Kelly sizing
 and paper trade execution.
@@ -324,13 +328,15 @@ We use quarter Kelly (`f* * 0.25`) to be conservative.
 ### Risk limits
 
 
-| Limit            | Default | Purpose                                      |
-| ---------------- | ------- | -------------------------------------------- |
-| Fractional Kelly | 0.25    | Bet 25% of full Kelly -- reduces variance    |
-| Max position     | $10     | Cap per single market                        |
-| Max exposure     | $25     | Cap across all open positions                |
-| Drawdown limit   | 20%     | Halt trading if bankroll drops 20% from peak |
-| Min bet          | $0.50   | Avoid dust positions                         |
+| Limit            | Default | Purpose                                         |
+| ---------------- | ------- | ----------------------------------------------- |
+| Fractional Kelly | 0.25    | Bet 25% of full Kelly -- reduces variance       |
+| Max position     | $10     | Cap per single market                           |
+| Max exposure     | $25     | Cap across all open positions                   |
+| Drawdown limit   | 25%     | Halt trading if bankroll drops 25% from peak    |
+| Min bet          | $0.50   | Avoid dust positions                            |
+| Min entry price  | $0.45   | Reject cheap tokens (low implied probability)   |
+| Halt cooldown    | 10 min  | Auto-unhalt after cooldown for data collection  |
 
 
 ### Position lifecycle
@@ -341,6 +347,8 @@ We use quarter Kelly (`f* * 0.25`) to be conservative.
 4. Exposure and position caps applied
 5. Paper position opened and logged
 6. When market resolves (via WS event or Gamma API fallback), P&L settled
+7. If drawdown exceeds 25%, trading halts for 10 minutes then auto-resumes
+   (peak bankroll resets to current value on unhalt)
 
 ### Resolution detection
 
@@ -368,27 +376,29 @@ bot 24/7 on EC2.
 Two tables:
 
 - **trades**: One row per paper trade. Records entry details (price, cost, Kelly,
-model prob, all signal values, BTC price). Settlement fields (won, pnl, outcome,
-bankroll_after) are NULL until resolved, then filled via `UPDATE`.
+model prob, all signal values, BTC price, bot_version). Settlement fields (won,
+pnl, outcome, bankroll_after) are NULL until resolved, then filled via `UPDATE`.
+The `bot_version` column (v3+) tracks which model iteration made each trade,
+enabling SQL-based A/B comparison across deployments.
 - **snapshots**: Periodic (30s) hub + risk state: BTC price, trend, market slug,
 orderbook quotes, bankroll, exposure, win/loss record.
 
 ### Analytics computed every hour
 
 
-| Metric            | What it tells you                                                |
-| ----------------- | ---------------------------------------------------------------- |
-| Win rate          | Basic profitability signal                                       |
-| Profit factor     | Gross wins / gross losses (>1.0 = profitable)                    |
-| Sharpe ratio      | Risk-adjusted return, annualized                                 |
-| Max drawdown      | Worst peak-to-trough loss                                        |
-| Brier score       | Probability calibration (lower = better, 0.25 = random baseline) |
-| Calibration       | When model says 70%, does Up actually win ~70%?                  |
-| P&L by hour       | Which hours of the day are most/least profitable                 |
-| Streak analysis   | Max consecutive wins/losses, current streak                      |
-| Edge buckets      | Does higher predicted edge actually produce more profit?         |
-| Signal win rates  | Per-signal direction correlation with outcomes                   |
-| Time in window    | Win rate by entry timing: early/mid/late in 5-min window         |
+| Metric           | What it tells you                                                |
+| ---------------- | ---------------------------------------------------------------- |
+| Win rate         | Basic profitability signal                                       |
+| Profit factor    | Gross wins / gross losses (>1.0 = profitable)                    |
+| Sharpe ratio     | Risk-adjusted return, annualized                                 |
+| Max drawdown     | Worst peak-to-trough loss                                        |
+| Brier score      | Probability calibration (lower = better, 0.25 = random baseline) |
+| Calibration      | When model says 70%, does Up actually win ~70%?                  |
+| P&L by hour      | Which hours of the day are most/least profitable                 |
+| Streak analysis  | Max consecutive wins/losses, current streak                      |
+| Edge buckets     | Does higher predicted edge actually produce more profit?         |
+| Signal win rates | Per-signal direction correlation with outcomes                   |
+| Time in window   | Win rate by entry timing: early/mid/late in 5-min window         |
 
 
 ### Key queries
@@ -413,12 +423,14 @@ network layer (see Security below).
 
 ### Endpoints
 
-| Endpoint   | Description                                                    |
-| ---------- | -------------------------------------------------------------- |
-| `/health`  | Uptime check                                                   |
-| `/status`  | Live BTC price, bankroll, exposure, win/loss, current market   |
-| `/trades`  | Recent trades with entry/settlement details (`?limit=N`)       |
-| `/stats`   | All-time + 24h summary, calibration, streaks, edge buckets, signal win rates, time-in-window |
+
+| Endpoint  | Description                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `/health` | Uptime check                                                                                 |
+| `/status` | Live BTC price, bankroll, exposure, win/loss, current market                                 |
+| `/trades` | Recent trades with entry/settlement details (`?limit=N`)                                     |
+| `/stats`  | All-time + 24h summary, calibration, streaks, edge buckets, signal win rates, time-in-window |
+
 
 ### Security
 
@@ -436,6 +448,7 @@ Client (HTTPS) → :443 nginx (TLS termination + auth) → :8080 bot (localhost 
 ```
 
 Steps:
+
 1. Point a domain (or subdomain) at the EC2 IP
 2. Install nginx + certbot on EC2
 3. Let's Encrypt auto-provisions and renews TLS certs
@@ -585,10 +598,9 @@ deploy/
 
 ## Known Limitations & Future Improvements
 
-- **Signal naivete**: The momentum/imbalance/edge signals are a starting point.
-After collecting a week of data, analyze calibration and P&L by hour to identify
-where the model is weak. Possible improvements: volatility regime filter, VWAP
-divergence signal, multi-timeframe momentum.
+- **Signal naivete**: Momentum and edge share the same BTC slope input — they're
+correlated, not independent. Future: add uncorrelated signals (spread width,
+VWAP divergence, multi-timeframe momentum, external sentiment).
 - **No real execution**: Phase 5 (wallet auth, CLOB order placement) is intentionally
 deferred until paper trading demonstrates a consistent edge over 1,000+ markets.
 - **Single-market focus**: Currently trades only BTC 5-min. The architecture supports
@@ -598,6 +610,12 @@ currently loses data until restart. Adding automatic reconnection with backoff
 would improve uptime.
 - **Backtest from SQLite**: The snapshots table contains enough data to replay
 historical market conditions and test new signal parameters offline.
+- **No real-time self-tuning**: Parameters are static Go constants. With only 57
+trades, online learning would overfit. Collect 500+ trades across market regimes,
+then tune offline using the `bot_version` column for A/B comparison.
+- **Signal correlation**: Momentum (55%) and Edge (30%) both use `BTCPriceSlope` —
+85% of composite weight depends on a single input. Adding truly independent
+signals would improve robustness.
 
 ## Phases
 

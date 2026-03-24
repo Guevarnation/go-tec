@@ -23,7 +23,8 @@ func (ib *Imbalance) Evaluate(h *hub.Hub, ms *hub.MarketState) Score {
 	// BidAskImbalance returns 0.0-1.0 where >0.5 = more bids = bullish
 	raw := ob.BidAskImbalance(ib.Depth)
 
-	// Map [0, 1] → [-1, +1]: strong bids = positive (Up), strong asks = negative (Down)
-	value := (raw - 0.5) * 2
+	// Data shows negative imbalance has 60% WR vs positive at 53% — signal is inverted.
+	// More ask depth (selling pressure) on Up token = contrarian bullish signal.
+	value := -((raw - 0.5) * 2)
 	return Score{Name: ib.Name(), Value: clamp(value, -1, 1)}
 }

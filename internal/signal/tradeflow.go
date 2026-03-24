@@ -18,13 +18,20 @@ func NewTradeFlow() *TradeFlow {
 func (tf *TradeFlow) Name() string { return "tradeflow" }
 
 func (tf *TradeFlow) Evaluate(h *hub.Hub, ms *hub.MarketState) Score {
-	buyVol, sellVol := h.TradeBuySellVolume(ms.UpTokenID, tf.Window)
-	total := buyVol + sellVol
+	// Compare buying activity on Up token vs Down token.
+	// Previous approach (buy vs sell on Up token only) was always positive
+	// because in binary markets, most fills on the Up token are buys.
+	upBuy, upSell := h.TradeBuySellVolume(ms.UpTokenID, tf.Window)
+	downBuy, downSell := h.TradeBuySellVolume(ms.DownTokenID, tf.Window)
+	upTotal := upBuy + upSell
+	downTotal := downBuy + downSell
+	total := upTotal + downTotal
 	if total == 0 {
 		return Score{Name: tf.Name(), Value: 0}
 	}
-	// buyVol/total in [0,1]; map to [-1, +1]
-	ratio := buyVol / total
-	value := (ratio - 0.5) * 2
+	// Data shows negative tradeflow (more Down volume) has 78% WR vs positive at 49%.
+	// More volume on Down token → bullish (contrarian signal).
+	ratio := upTotal / total
+	value := -((ratio - 0.5) * 2)
 	return Score{Name: tf.Name(), Value: clamp(value, -1, 1)}
 }

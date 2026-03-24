@@ -102,6 +102,7 @@ func (s *Store) migrate() error {
 	// Best-effort migrations for existing databases (columns may already exist)
 	s.db.Exec(`ALTER TABLE trades ADD COLUMN tradeflow REAL`)
 	s.db.Exec(`ALTER TABLE trades ADD COLUMN btc_volatility REAL`)
+	s.db.Exec(`ALTER TABLE trades ADD COLUMN bot_version TEXT`)
 
 	return nil
 }
@@ -125,17 +126,18 @@ type TradeRecord struct {
 	BTCPrice      float64
 	BTCVolatility float64
 	OpenedAt      time.Time
+	BotVersion    string
 }
 
 func (s *Store) LogTrade(t TradeRecord) error {
 	_, err := s.db.Exec(`
 		INSERT INTO trades (slug, direction, token_id, entry_price, shares, cost,
 			kelly_frac, model_prob, confidence, edge, momentum, imbalance,
-			edge_signal, tradeflow, btc_price, btc_volatility, opened_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			edge_signal, tradeflow, btc_price, btc_volatility, opened_at, bot_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Slug, t.Direction, t.TokenID, t.EntryPrice, t.Shares, t.Cost,
 		t.KellyFrac, t.ModelProb, t.Confidence, t.Edge, t.Momentum, t.Imbalance,
-		t.EdgeSignal, t.TradeFlow, t.BTCPrice, t.BTCVolatility, t.OpenedAt,
+		t.EdgeSignal, t.TradeFlow, t.BTCPrice, t.BTCVolatility, t.OpenedAt, t.BotVersion,
 	)
 	return err
 }
@@ -242,6 +244,27 @@ func (s *Store) SettledTradesSince(since time.Time) ([]SettledTrade, error) {
 
 func (s *Store) AllSettledTrades() ([]SettledTrade, error) {
 	return s.SettledTradesSince(time.Time{})
+}
+
+// LastBankroll returns the most recent bankroll_after value from settled trades.
+// Returns (0, false) if no settled trades exist.
+func (s *Store) LastBankroll() (float64, bool) {
+	var bankroll float64
+	err := s.db.QueryRow(`
+		SELECT bankroll_after FROM trades
+		WHERE settled_at IS NOT NULL AND bankroll_after IS NOT NULL
+		ORDER BY settled_at DESC LIMIT 1`).Scan(&bankroll)
+	if err != nil {
+		return 0, false
+	}
+	return bankroll, true
+}
+
+// TradeCount returns the total number of settled trades.
+func (s *Store) TradeCount() int {
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE settled_at IS NOT NULL`).Scan(&count)
+	return count
 }
 
 // --- API query methods ---

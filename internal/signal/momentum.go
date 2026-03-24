@@ -15,7 +15,7 @@ type Momentum struct {
 func NewMomentum() *Momentum {
 	return &Momentum{
 		Window:      60,
-		Sensitivity: 2.0,
+		Sensitivity: 1.0,
 	}
 }
 

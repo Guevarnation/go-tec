@@ -14,13 +14,14 @@ import (
 
 // ManagerConfig holds tunable risk parameters.
 type ManagerConfig struct {
-	Bankroll        float64 // starting paper balance (default $100)
-	FractionalKelly float64 // fraction of full Kelly to bet (default 0.25 = quarter Kelly)
-	MaxPosition     float64 // max cost per single market (default $10)
-	MaxExposure     float64 // max total cost across all open positions (default $25)
-	DrawdownLimit   float64 // halt trading at this % drawdown from peak (default 0.15)
-	MinBet          float64 // minimum bet cost to avoid dust positions (default $0.50)
-	MinEntryPrice   float64 // reject asks below this price -- cheap tokens signal low probability (default 0.45)
+	Bankroll        float64       // starting paper balance (default $100)
+	FractionalKelly float64       // fraction of full Kelly to bet (default 0.25 = quarter Kelly)
+	MaxPosition     float64       // max cost per single market (default $10)
+	MaxExposure     float64       // max total cost across all open positions (default $25)
+	DrawdownLimit   float64       // halt trading at this % drawdown from peak (default 0.25)
+	MinBet          float64       // minimum bet cost to avoid dust positions (default $0.50)
+	MinEntryPrice   float64       // reject asks below this price -- cheap tokens signal low probability (default 0.45)
+	HaltCooldown    time.Duration // auto-unhalt after this duration to keep collecting data (default 10m)
 }
 
 func DefaultManagerConfig() ManagerConfig {
@@ -29,9 +30,10 @@ func DefaultManagerConfig() ManagerConfig {
 		FractionalKelly: 0.25,
 		MaxPosition:     10.0,
 		MaxExposure:     25.0,
-		DrawdownLimit:   0.15,
+		DrawdownLimit:   0.25,
 		MinBet:          0.50,
 		MinEntryPrice:   0.45,
+		HaltCooldown:    10 * time.Minute,
 	}
 }
 
@@ -97,10 +99,12 @@ type Manager struct {
 	positions    map[string]*Position
 	settlements  []Settlement
 
-	totalPnL float64
-	wins     int
-	losses   int
-	halted   bool
+	totalPnL  float64
+	wins      int
+	losses    int
+	halted    bool
+	haltedAt  time.Time // when the halt was triggered (for cooldown)
+	haltCount int       // number of times halt has triggered this session
 
 	OnSettle SettleFunc // optional callback for settlement persistence
 	OnHalt   HaltFunc   // optional callback for drawdown breaker alert
@@ -117,6 +121,18 @@ func NewManager(logger *slog.Logger, cfg ManagerConfig) *Manager {
 	}
 }
 
+// RestoreBankroll sets the bankroll and peak to a previously persisted value.
+// Call this before any trading begins to resume from the last known state.
+func (m *Manager) RestoreBankroll(bankroll float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bankroll = bankroll
+	m.peakBankroll = bankroll
+	m.logger.Info("bankroll restored from database",
+		"bankroll", fmt.Sprintf("$%.2f", bankroll),
+	)
+}
+
 // Evaluate takes a signal decision, looks up the orderbook for the target
 // token, computes Kelly sizing, enforces limits, and returns an Order
 // (or nil if the trade is rejected).
@@ -124,6 +140,9 @@ func (m *Manager) Evaluate(dec signal.Decision, h *hub.Hub) *Order {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.halted {
+		m.checkCooldown()
+	}
 	if m.halted {
 		return nil
 	}
@@ -281,12 +300,15 @@ func (m *Manager) SettleResolved(h *hub.Hub) {
 		}
 
 		drawdown := (m.peakBankroll - m.bankroll) / m.peakBankroll
-		if drawdown >= m.cfg.DrawdownLimit {
+		if drawdown >= m.cfg.DrawdownLimit && !m.halted {
 			m.halted = true
+			m.haltedAt = time.Now()
+			m.haltCount++
 			m.logger.Warn("drawdown breaker triggered",
 				"drawdown", fmt.Sprintf("%.1f%%", drawdown*100),
 				"bankroll", fmt.Sprintf("$%.2f", m.bankroll),
 				"peak", fmt.Sprintf("$%.2f", m.peakBankroll),
+				"halt_count", m.haltCount,
 			)
 			if m.OnHalt != nil {
 				m.OnHalt(drawdown, m.bankroll, m.peakBankroll)
@@ -312,6 +334,24 @@ func (m *Manager) currentExposure() float64 {
 		total += p.Cost
 	}
 	return total
+}
+
+// checkCooldown auto-unhalts after the cooldown period so the bot keeps
+// collecting trade data for offline model tuning. Must be called with lock held.
+func (m *Manager) checkCooldown() {
+	if !m.halted || m.cfg.HaltCooldown <= 0 {
+		return
+	}
+	if time.Since(m.haltedAt) >= m.cfg.HaltCooldown {
+		m.halted = false
+		// Reset peak to current bankroll so the next drawdown is measured fresh
+		m.peakBankroll = m.bankroll
+		m.logger.Info("auto-unhalt after cooldown",
+			"cooldown", m.cfg.HaltCooldown,
+			"bankroll", fmt.Sprintf("$%.2f", m.bankroll),
+			"halt_count", m.haltCount,
+		)
+	}
 }
 
 // IsHalted returns true if the drawdown breaker has been triggered.

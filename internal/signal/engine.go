@@ -12,10 +12,12 @@ type EngineConfig struct {
 	MinDataPoints int           // minimum BTC price ticks before evaluating (default 30)
 	MaxExpiry     time.Duration // don't trade if expiry > this (default 4m30s, i.e. wait 30s after open)
 	MinExpiry     time.Duration // don't trade if expiry < this (default 30s, no fills possible)
-	MinConfidence float64       // minimum composite confidence to trade (default 0.15)
-	MinEdge       float64       // minimum model-vs-market edge to trade (default 0.03)
+	MinConfidence float64       // minimum composite confidence to trade (default 0.20)
+	MinEdge       float64       // minimum model-vs-market edge to trade (default 0.05)
+	MaxEdge       float64       // reject "too good to be true" edge — overconfident bets lose money (default 0.10)
 	MaxVolatility float64       // max BTC price CV before suppressing trades (default 0.003 = 0.3%)
 	VolWindow     int           // window for volatility calculation in ticks (default 60)
+	SkipHoursUTC  map[int]bool  // UTC hours to skip trading (data shows consistent losses)
 }
 
 func DefaultEngineConfig() EngineConfig {
@@ -25,8 +27,12 @@ func DefaultEngineConfig() EngineConfig {
 		MinExpiry:     30 * time.Second,
 		MinConfidence: 0.20,
 		MinEdge:       0.05,
+		MaxEdge:       0.10,
 		MaxVolatility: 0.003,
 		VolWindow:     60,
+		SkipHoursUTC: map[int]bool{
+			15: true, 16: true, 17: true, 18: true, 19: true, 20: true, 21: true,
+		},
 	}
 }
 
@@ -91,6 +97,12 @@ func (e *Engine) Evaluate(h *hub.Hub) Decision {
 		return dec
 	}
 
+	// Hour-of-day gate: skip hours with consistently negative P&L
+	if len(e.cfg.SkipHoursUTC) > 0 && e.cfg.SkipHoursUTC[now.UTC().Hour()] {
+		dec.Reason = "skip hour (negative P&L history)"
+		return dec
+	}
+
 	// Volatility gate: suppress in high-volatility regimes where
 	// simple momentum signals become unreliable noise
 	btcPrice, _, _ := h.BTCPrice()
@@ -141,7 +153,7 @@ func (e *Engine) Evaluate(h *hub.Hub) Decision {
 		dec.Edge = math.Abs(modelProb - marketProb)
 	}
 
-	// Gate: only recommend trading if confidence and edge exceed thresholds
+	// Gate: only recommend trading if confidence and edge are in acceptable range
 	switch {
 	case dec.Confidence < e.cfg.MinConfidence:
 		dec.ShouldTrade = false
@@ -149,6 +161,9 @@ func (e *Engine) Evaluate(h *hub.Hub) Decision {
 	case dec.Edge < e.cfg.MinEdge:
 		dec.ShouldTrade = false
 		dec.Reason = "edge below threshold"
+	case e.cfg.MaxEdge > 0 && dec.Edge > e.cfg.MaxEdge:
+		dec.ShouldTrade = false
+		dec.Reason = "edge too high (overconfident)"
 	default:
 		dec.ShouldTrade = true
 		dec.Reason = "signal confirmed"
